@@ -17,7 +17,8 @@ import java.nio.charset.StandardCharsets;
  * Response (EJ):
  *   [Header] EJ [ErrorCode:2A] [PublicKey:variable DER] [PrivKeyLength:4N] [PrivKey:variable LMK-encrypted]
  * 
- * KeyType: 0=key management, 1=signature generation+verification
+ * KeyType: 0/1 as defined in the EI spec for your firmware; the POC uses 0
+ * (RPP / signing-oriented generation—pair with your lab command manual).
  * EncodingRules: 01=DER encoding for ASN.1 Public Key
  */
 public class EICommand {
@@ -30,7 +31,7 @@ public class EICommand {
      * Build the EI command bytes.
      * 
      * @param header     message header string (e.g. "0000")
-     * @param keyType    0 or 1 (1 = signature gen + verify)
+     * @param keyType    0 or 1 (POC: 0 for RPP signing; confirm against host command manual)
      * @param modulusBits RSA modulus length: 320-4096
      * @param encoding   01 = DER ASN.1
      */
@@ -41,7 +42,6 @@ public class EICommand {
                 encoding                                          // Encoding rules (01 = DER)
         );
     }
-
     /**
      * Parse the EJ response into a KeyGenerationResult.
      * 

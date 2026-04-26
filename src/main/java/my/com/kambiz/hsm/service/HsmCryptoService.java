@@ -39,7 +39,7 @@ public class HsmCryptoService {
      * Generate an RSA key pair inside the HSM and store the private key in user storage.
      * 
      * Flow:
-     *   1. EI command → generates key pair, returns public key (DER) + private key (LMK-encrypted)
+     *   1. EI command (key type 0, RPP-style) → generates key pair, returns public key (DER) + private key (LMK-encrypted)
      *   2. LA command → stores the LMK-encrypted private key at user storage index (e.g., 000)
      *   3. EO command → imports the public key to get the MAC for later verification
      */
@@ -194,5 +194,13 @@ public class HsmCryptoService {
     /** Get connection pool stats */
     public String getPoolStats() {
         return connectionPool.getPoolStats();
+    }
+
+    /**
+     * Execute a raw command against the HSM.
+     * Used for diagnostic commands that don't fit the key/sign/verify pattern.
+     */
+    public byte[] executeRaw(byte[] command) {
+        return connectionPool.execute(command);
     }
 }
