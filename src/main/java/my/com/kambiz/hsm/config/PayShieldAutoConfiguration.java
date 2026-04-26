@@ -7,6 +7,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Spring Boot auto-configuration for the hsm-crypto-starter library.
@@ -18,9 +20,12 @@ import org.springframework.context.annotation.Bean;
 @ConditionalOnProperty(prefix = "payshield", name = "host")
 public class PayShieldAutoConfiguration {
 
+    private static final Logger log = LoggerFactory.getLogger(PayShieldAutoConfiguration.class);
+
     @Bean
     @ConditionalOnMissingBean
     public PayShieldConnectionPool payShieldConnectionPool(PayShieldProperties properties) {
+        log.info("HSM Config -> {}:{}", properties.getHost(), properties.getPort());
         return new PayShieldConnectionPool(properties);
     }
 
