@@ -3,6 +3,7 @@ package my.com.kambiz.hsm.service;
 import my.com.kambiz.hsm.command.*;
 import my.com.kambiz.hsm.config.PayShieldProperties;
 import my.com.kambiz.hsm.connection.PayShieldConnectionPool;
+import my.com.kambiz.hsm.exception.PayShieldException;
 import my.com.kambiz.hsm.model.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,12 +37,15 @@ public class HsmCryptoService {
     // ===== 1. KEY GENERATION =====
 
     /**
-     * Generate an RSA key pair inside the HSM and store the private key in user storage.
+     * Generate an RSA key pair inside the HSM.
      * 
      * Flow:
-     *   1. EI command (key type 0, RPP-style) → generates key pair, returns public key (DER) + private key (LMK-encrypted)
-     *   2. LA command → stores the LMK-encrypted private key at user storage index (e.g., 000)
-     *   3. EO command → imports the public key to get the MAC for later verification
+     *   1. EI command → generates key pair, returns public key (DER) + private key (LMK-encrypted)
+     *   2. Private key blob stored in memory (for inline use in EW signing)
+     * 
+     * Note: EI is stateless — the HSM does not retain the key after returning it.
+     * The LMK-encrypted private key must be stored by the application and passed
+     * back inline in every EW (sign) call.
      */
     public KeyGenerationResult generateKeyPair(int modulusBits) {
         log.info("=== Generating RSA-{} key pair via HSM ===", modulusBits);
@@ -49,7 +53,7 @@ public class HsmCryptoService {
 
         // Step 1: EI - Generate RSA Key Pair
         log.info("Step 1: Sending EI command (Generate RSA Key Pair, {} bits)", modulusBits);
-        byte[] eiCmd = EICommand.build(header, 1, modulusBits, "01");
+        byte[] eiCmd = EICommand.build(header, 0, modulusBits, "01");
         log.debug("EI command hex: {}", CommandUtils.bytesToHex(eiCmd));
 
         byte[] eiResp = connectionPool.execute(eiCmd);
@@ -57,24 +61,8 @@ public class HsmCryptoService {
         log.info("EI success: publicKey={} bytes, privateKey={} bytes (LMK-encrypted)",
                 result.getPublicKeyDer().length, result.getPrivateKeyLmkEncrypted().length);
 
-        // Step 2: LA - Store private key in HSM user storage
-        String storageIndex = properties.getPrivateKeyStorageIndex();
-        log.info("Step 2: Sending LA command (Store private key at index {})", storageIndex);
-        byte[] laCmd = LACommand.build(header, storageIndex, result.getPrivateKeyLmkEncrypted());
-        byte[] laResp = connectionPool.execute(laCmd);
-        LACommand.verifyResponse(laResp, properties.getHeaderLength());
-        log.info("LA success: private key stored at user storage index {}", storageIndex);
-
-        // Step 3: EO - Import the public key to get MAC for verification
-        log.info("Step 3: Sending EO command (Import public key for MAC)");
-        byte[] eoCmd = EOCommand.build(header, result.getPublicKeyDer(), new byte[0]);
-        byte[] eoResp = connectionPool.execute(eoCmd);
-        PublicKeyImportResult importResult = EOCommand.parseResponse(eoResp, properties.getHeaderLength());
-        log.info("EO success: MAC={}", importResult.getMacHex());
-
-        // Store in memory for subsequent operations
+        // Store in memory for subsequent signing operations
         this.currentKeyPair = result;
-        this.currentPublicKeyImport = importResult;
 
         return result;
     }
@@ -82,8 +70,8 @@ public class HsmCryptoService {
     // ===== 2. SIGNING =====
 
     /**
-     * Sign a message using the RSA private key stored in HSM user storage.
-     * Uses the EW command with key flag 91 (variant LMK, user storage reference).
+     * Sign a message using the LMK-encrypted private key inline in the EW command.
+     * The private key blob from EI is sent directly — no LA/user storage needed.
      */
     public SigningResult signMessage(byte[] messageData) {
         return signMessage(messageData, properties.getDefaultHashId(), properties.getDefaultPadMode());
@@ -91,35 +79,23 @@ public class HsmCryptoService {
 
     /**
      * Sign a message with specific hash and padding options.
+     * Uses inline private key (flag 99 + key blob).
      */
     public SigningResult signMessage(byte[] messageData, String hashId, String padMode) {
-        log.info("=== Signing message ({} bytes) via HSM ===", messageData.length);
-        String header = CommandUtils.generateHeader(properties.getHeaderLength());
-        String storageIndex = properties.getPrivateKeyStorageIndex();
+        if (currentKeyPair == null) {
+            throw new PayShieldException("No key pair available. Generate a key pair first.");
+        }
 
-        byte[] ewCmd = EWCommand.buildWithUserStorage(
-                header, hashId, properties.getDefaultSigId(), padMode,
-                messageData, storageIndex);
-
-        log.debug("EW command hex: {}", CommandUtils.bytesToHex(ewCmd));
-        byte[] ewResp = connectionPool.execute(ewCmd);
-
-        return EWCommand.parseResponse(ewResp, properties.getHeaderLength(), hashId, padMode);
-    }
-
-    /**
-     * Sign a message using inline LMK-encrypted private key (alternative flow).
-     */
-    public SigningResult signMessageWithInlineKey(byte[] messageData, byte[] privateKeyLmk,
-                                                   String hashId, String padMode) {
-        log.info("=== Signing message ({} bytes) with inline key via HSM ===", messageData.length);
+        log.info("=== Signing message ({} bytes) via HSM (inline key) ===", messageData.length);
         String header = CommandUtils.generateHeader(properties.getHeaderLength());
 
         byte[] ewCmd = EWCommand.buildWithInlineKey(
                 header, hashId, properties.getDefaultSigId(), padMode,
-                messageData, privateKeyLmk);
+                messageData, currentKeyPair.getPrivateKeyLmkEncrypted());
 
+        log.debug("EW command length: {} bytes", ewCmd.length);
         byte[] ewResp = connectionPool.execute(ewCmd);
+
         return EWCommand.parseResponse(ewResp, properties.getHeaderLength(), hashId, padMode);
     }
 
@@ -198,7 +174,7 @@ public class HsmCryptoService {
 
     /**
      * Execute a raw command against the HSM.
-     * Used for diagnostic commands that don't fit the key/sign/verify pattern.
+     * Used for diagnostic commands (NC, NO) that don't fit the key/sign/verify pattern.
      */
     public byte[] executeRaw(byte[] command) {
         return connectionPool.execute(command);
