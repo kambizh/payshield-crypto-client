@@ -38,22 +38,22 @@ The library is designed to be consumed as an embedded JAR dependency.
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│              iMochaRPPGateway / POC WebApp           │
-│                  (Spring Boot Application)           │
+│              iMochaRPPGateway / POC WebApp          │
+│                  (Spring Boot Application)          │
 └──────────────────────┬──────────────────────────────┘
                        │ Java API calls
 ┌──────────────────────▼──────────────────────────────┐
-│              payshield-crypto-client                  │
-│                 (Embedded JAR Library)                │
-│                                                      │
+│              payshield-crypto-client                │
+│                 (Embedded JAR Library)              │
+│                                                     │
 │  ┌─────────────────┐  ┌──────────────────────────┐  │
-│  │ HsmCryptoService │  │ Command Builders/Parsers │  │
-│  │  (orchestrator)  │  │  EI, EW, EO, EY, NC, NO │  │
+│  │ HsmCryptoService│  │ Command Builders/Parsers │  │
+│  │  (orchestrator) │  │  EI, EW, EO, EY, NC, NO  │  │
 │  └────────┬────────┘  └──────────────────────────┘  │
-│           │                                          │
+│           │                                         │
 │  ┌────────▼────────────────────────────────────────┐│
 │  │ PayShieldConnectionPool (Commons Pool2)         ││
-│  │  └─ PayShieldConnection (TCP + 2-byte framing) ││
+│  │  └─ PayShieldConnection (TCP + 2-byte framing)  ││
 │  └─────────────────────────────────────────────────┘│
 └──────────────────────┬──────────────────────────────┘
                        │ TCP socket (2-byte length prefix)
@@ -139,6 +139,11 @@ VerificationResult result = hsmService.verifySignature(signature, message, publi
 boolean isValid = result.isValid(); // true if signature matches
 ```
 
+## Health check 
+
+http://100.30.122.138:8080/api/hsm-status
+http://100.30.122.138:8080/api/diagnostics
+
 ## Project Structure
 
 ```
@@ -208,3 +213,5 @@ payshield-crypto-client/
 
 - payShield 10K Core Host Commands V1.7a (007-001515-007)
 - payShield 10K Host Command Examples V1.7a (007-001443-007)
+
+
