@@ -38,13 +38,13 @@ The library is designed to be consumed as an embedded JAR dependency.
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│              iMochaRPPGateway / POC WebApp          │
-│                  (Spring Boot Application)          │
+│                    POC WebApp                       │
+│            (Spring Boot Application)                │
 └──────────────────────┬──────────────────────────────┘
                        │ Java API calls
 ┌──────────────────────▼──────────────────────────────┐
 │              payshield-crypto-client                │
-│                 (Embedded JAR Library)              │
+│               (Embedded JAR Library)                │
 │                                                     │
 │  ┌─────────────────┐  ┌──────────────────────────┐  │
 │  │ HsmCryptoService│  │ Command Builders/Parsers │  │
