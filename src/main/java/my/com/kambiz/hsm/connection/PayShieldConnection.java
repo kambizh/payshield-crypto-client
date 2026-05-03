@@ -18,6 +18,11 @@ import java.net.Socket;
  *   followed by the 2-char command code and the command-specific fields.
  * 
  * The payShield returns responses in the same framing.
+ * 
+ * Port selection:
+ *   Variant LMK  → payshield.port (default 1501)
+ *   Key Block LMK → payshield.port-key-block (default 1502)
+ *   Determined by payshield.lmk-mode property via getActivePort().
  */
 public class PayShieldConnection implements Closeable {
 
@@ -31,21 +36,24 @@ public class PayShieldConnection implements Closeable {
 
     public PayShieldConnection(PayShieldProperties props) {
         try {
+            int activePort = props.getActivePort();
             this.socket = new Socket();
             this.socket.setSoTimeout(props.getReadTimeoutMs());
             this.socket.setTcpNoDelay(true);
             this.socket.setKeepAlive(true);
             this.socket.connect(
-                    new InetSocketAddress(props.getHost(), props.getPort()),
+                    new InetSocketAddress(props.getHost(), activePort),
                     props.getConnectTimeoutMs()
             );
             this.in = new BufferedInputStream(socket.getInputStream());
             this.out = new BufferedOutputStream(socket.getOutputStream());
             this.lengthPrefixEnabled = props.isLengthPrefixEnabled();
-            log.info("Connected to payShield 10K at {}:{}", props.getHost(), props.getPort());
+            log.info("Connected to payShield 10K at {}:{} (LMK mode: {})",
+                    props.getHost(), activePort, props.getLmkMode());
         } catch (IOException e) {
             throw new PayShieldException("Failed to connect to payShield at "
-                    + props.getHost() + ":" + props.getPort(), e);
+                    + props.getHost() + ":" + props.getActivePort()
+                    + " (LMK mode: " + props.getLmkMode() + ")", e);
         }
     }
 
