@@ -171,6 +171,76 @@ public class HsmCryptoService {
         return EYCommand.parseResponse(eyResp, properties.getHeaderLength());
     }
 
+    // ===== 4. CSR GENERATION (Key Block LMK only) =====
+
+    /**
+     * Generate a Certificate Signing Request (CSR) via the native QE command.
+     * Requires Key Block LMK mode (port 1502) — the QE command only accepts
+     * 'S'-prefixed Key Block private keys.
+     *
+     * The HSM internally builds the PKCS#10 envelope and signs it — the private
+     * key never leaves the HSM boundary.
+     *
+     * @param commonName  CN for the CSR subject
+     * @param organization O
+     * @param orgUnit     OU
+     * @param locality    L
+     * @param state       ST
+     * @param country     C (2-char ISO code)
+     * @param pemOutput   true=PEM format, false=Hex DER format
+     * @return CSR data (PEM or Hex DER)
+     */
+    public CsrGenerationResult generateCsr(String commonName, String organization,
+                                            String orgUnit, String locality,
+                                            String state, String country,
+                                            boolean pemOutput) {
+        if (currentKeyPair == null) {
+            throw new PayShieldException("No key pair available. Generate a key pair first.");
+        }
+        if (!currentKeyPair.isKeyBlock()) {
+            throw new PayShieldException("CSR generation via QE requires Key Block LMK mode. " +
+                    "Current key pair was generated in Variant LMK mode.");
+        }
+
+        LmkMode mode = getLmkMode();
+        log.info("=== Generating CSR via HSM QE command (LMK mode: {}) ===", mode);
+        log.info("Subject: CN={}, O={}, OU={}, L={}, ST={}, C={}",
+                commonName, organization, orgUnit, locality, state, country);
+
+        String header = CommandUtils.generateHeader(properties.getHeaderLength());
+
+        byte[] qeCmd;
+        if (pemOutput) {
+            qeCmd = QECommand.buildPem(header,
+                    currentKeyPair.getPublicKeyDer(),
+                    currentKeyPair.getPrivateKeyLmkEncrypted(),
+                    commonName, organization, orgUnit, locality, state, country);
+        } else {
+            qeCmd = QECommand.buildDer(header,
+                    currentKeyPair.getPublicKeyDer(),
+                    currentKeyPair.getPrivateKeyLmkEncrypted(),
+                    commonName, organization, orgUnit, locality, state, country);
+        }
+
+        log.debug("QE command length: {} bytes", qeCmd.length);
+        byte[] qeResp = connectionPool.execute(qeCmd);
+
+        CsrGenerationResult result = QECommand.parseResponse(qeResp, properties.getHeaderLength());
+        log.info("QE success: CSR generated, {} chars, format={}",
+                result.getCsrLength(), pemOutput ? "PEM" : "HexDER");
+
+        return result;
+    }
+
+    /**
+     * Generate CSR with PEM output using default hash (SHA-256) and padding (PKCS#1 v1.5).
+     */
+    public CsrGenerationResult generateCsrPem(String commonName, String organization,
+                                               String orgUnit, String locality,
+                                               String state, String country) {
+        return generateCsr(commonName, organization, orgUnit, locality, state, country, true);
+    }
+
     // ===== UTILITY =====
 
     /**
