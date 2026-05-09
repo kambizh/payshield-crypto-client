@@ -28,7 +28,7 @@ public class PayShieldProperties {
      * LMK operating mode: "variant" or "keyblock".
      * Controls which port is used and how commands are constructed/parsed.
      */
-    private String lmkMode = "variant";
+    private String lmkMode = "keyblock";
 
     /** Message header length configured on the HSM (0, 2, or 4 chars) */
     private int headerLength = 4;

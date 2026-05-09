@@ -10,15 +10,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * High-level service for payShield 10K HSM operations.
+ * Stateless service for payShield 10K HSM operations.
  *
  * Supports dual LMK modes controlled by payshield.lmk-mode property:
  *   - "variant"  → 3DES Variant LMK (port 1501)
  *   - "keyblock" → AES Key Block LMK (port 1502)
  *
- * The service automatically adjusts command construction and response parsing
- * based on the configured mode. All three core operations (generate, sign, verify)
- * are mode-aware.
+ * This service holds no state between calls. The caller is responsible for
+ * storing and passing back any key material returned by previous operations.
  */
 public class HsmCryptoService {
 
@@ -26,10 +25,6 @@ public class HsmCryptoService {
 
     private final PayShieldConnectionPool connectionPool;
     private final PayShieldProperties properties;
-
-    // In-memory state for the POC (in production, this would be in a database)
-    private KeyGenerationResult currentKeyPair;
-    private PublicKeyImportResult currentPublicKeyImport;
 
     public HsmCryptoService(PayShieldConnectionPool connectionPool, PayShieldProperties properties) {
         this.connectionPool = connectionPool;
@@ -76,25 +71,34 @@ public class HsmCryptoService {
                 result.getPrivateKeyLmkEncrypted().length,
                 result.getLmkScheme());
 
-        this.currentKeyPair = result;
         return result;
     }
 
     // ===== 2. SIGNING =====
 
-    public SigningResult signMessage(byte[] messageData) {
-        return signMessage(messageData, properties.getDefaultHashId(), properties.getDefaultPadMode());
+    /**
+     * Sign a message using the default hash and padding from configuration.
+     *
+     * @param messageData      data to sign
+     * @param privateKeyBlob   LMK-encrypted private key blob returned by generateKeyPair()
+     * @param isKeyBlock       true if the key blob is in Key Block format (from KEYBLOCK mode)
+     */
+    public SigningResult signMessage(byte[] messageData, byte[] privateKeyBlob, boolean isKeyBlock) {
+        return signMessage(messageData, privateKeyBlob, isKeyBlock,
+                properties.getDefaultHashId(), properties.getDefaultPadMode());
     }
 
     /**
-     * Sign a message with specific hash and padding options.
-     * Mode-aware: uses correct EW builder based on key type.
+     * Sign a message with explicit hash and padding options.
+     *
+     * @param messageData      data to sign
+     * @param privateKeyBlob   LMK-encrypted private key blob returned by generateKeyPair()
+     * @param isKeyBlock       true if the key blob is in Key Block format (from KEYBLOCK mode)
+     * @param hashId           hash algorithm ID (e.g. "06" = SHA-256)
+     * @param padMode          padding mode ID (e.g. "01" = PKCS#1 v1.5)
      */
-    public SigningResult signMessage(byte[] messageData, String hashId, String padMode) {
-        if (currentKeyPair == null) {
-            throw new PayShieldException("No key pair available. Generate a key pair first.");
-        }
-
+    public SigningResult signMessage(byte[] messageData, byte[] privateKeyBlob, boolean isKeyBlock,
+                                     String hashId, String padMode) {
         LmkMode mode = getLmkMode();
         log.info("=== Signing message ({} bytes) via HSM (LMK mode: {}, inline key) ===",
                 messageData.length, mode);
@@ -102,9 +106,7 @@ public class HsmCryptoService {
 
         byte[] ewCmd = EWCommand.buildWithInlineKeyAuto(
                 header, hashId, properties.getDefaultSigId(), padMode,
-                messageData,
-                currentKeyPair.getPrivateKeyLmkEncrypted(),
-                currentKeyPair.isKeyBlock());
+                messageData, privateKeyBlob, isKeyBlock);
 
         log.debug("EW command length: {} bytes", ewCmd.length);
         byte[] ewResp = connectionPool.execute(ewCmd);
@@ -181,27 +183,22 @@ public class HsmCryptoService {
      * The HSM internally builds the PKCS#10 envelope and signs it — the private
      * key never leaves the HSM boundary.
      *
-     * @param commonName  CN for the CSR subject
-     * @param organization O
-     * @param orgUnit     OU
-     * @param locality    L
-     * @param state       ST
-     * @param country     C (2-char ISO code)
-     * @param pemOutput   true=PEM format, false=Hex DER format
+     * @param publicKeyDer    DER-encoded public key from generateKeyPair()
+     * @param privateKeyBlock S-prefixed Key Block private key from generateKeyPair()
+     * @param commonName      CN for the CSR subject
+     * @param organization    O
+     * @param orgUnit         OU
+     * @param locality        L
+     * @param state           ST
+     * @param country         C (2-char ISO code)
+     * @param pemOutput       true=PEM format, false=Hex DER format
      * @return CSR data (PEM or Hex DER)
      */
-    public CsrGenerationResult generateCsr(String commonName, String organization,
+    public CsrGenerationResult generateCsr(byte[] publicKeyDer, byte[] privateKeyBlock,
+                                            String commonName, String organization,
                                             String orgUnit, String locality,
                                             String state, String country,
                                             boolean pemOutput) {
-        if (currentKeyPair == null) {
-            throw new PayShieldException("No key pair available. Generate a key pair first.");
-        }
-        if (!currentKeyPair.isKeyBlock()) {
-            throw new PayShieldException("CSR generation via QE requires Key Block LMK mode. " +
-                    "Current key pair was generated in Variant LMK mode.");
-        }
-
         LmkMode mode = getLmkMode();
         log.info("=== Generating CSR via HSM QE command (LMK mode: {}) ===", mode);
         log.info("Subject: CN={}, O={}, OU={}, L={}, ST={}, C={}",
@@ -211,14 +208,10 @@ public class HsmCryptoService {
 
         byte[] qeCmd;
         if (pemOutput) {
-            qeCmd = QECommand.buildPem(header,
-                    currentKeyPair.getPublicKeyDer(),
-                    currentKeyPair.getPrivateKeyLmkEncrypted(),
+            qeCmd = QECommand.buildPem(header, publicKeyDer, privateKeyBlock,
                     commonName, organization, orgUnit, locality, state, country);
         } else {
-            qeCmd = QECommand.buildDer(header,
-                    currentKeyPair.getPublicKeyDer(),
-                    currentKeyPair.getPrivateKeyLmkEncrypted(),
+            qeCmd = QECommand.buildDer(header, publicKeyDer, privateKeyBlock,
                     commonName, organization, orgUnit, locality, state, country);
         }
 
@@ -234,11 +227,16 @@ public class HsmCryptoService {
 
     /**
      * Generate CSR with PEM output using default hash (SHA-256) and padding (PKCS#1 v1.5).
+     *
+     * @param publicKeyDer    DER-encoded public key from generateKeyPair()
+     * @param privateKeyBlock S-prefixed Key Block private key from generateKeyPair()
      */
-    public CsrGenerationResult generateCsrPem(String commonName, String organization,
+    public CsrGenerationResult generateCsrPem(byte[] publicKeyDer, byte[] privateKeyBlock,
+                                               String commonName, String organization,
                                                String orgUnit, String locality,
                                                String state, String country) {
-        return generateCsr(commonName, organization, orgUnit, locality, state, country, true);
+        return generateCsr(publicKeyDer, privateKeyBlock,
+                commonName, organization, orgUnit, locality, state, country, true);
     }
 
     // ===== UTILITY =====
@@ -262,8 +260,6 @@ public class HsmCryptoService {
         return EOCommand.parseResponse(eoResp, properties.getHeaderLength(), mode);
     }
 
-    public KeyGenerationResult getCurrentKeyPair() { return currentKeyPair; }
-    public PublicKeyImportResult getCurrentPublicKeyImport() { return currentPublicKeyImport; }
     public String getPoolStats() { return connectionPool.getPoolStats(); }
 
     /**
