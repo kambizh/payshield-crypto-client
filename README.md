@@ -120,7 +120,7 @@ payshield:
   lmk-mode: keyblock           # "keyblock" (default) or "variant"
   connect-timeout-ms: 5000
   read-timeout-ms: 10000
-  length-prefix-enabled: true
+  length-prefix-enabled: true  # must be true — setting false throws at runtime
   header-length: 4             # 0, 2, or 4 — must match HSM config
 
   # Connection pool
@@ -290,7 +290,7 @@ payshield-crypto-client/
 - **HSM**: Thales payShield 10K
 - **Firmware**: 2200-1011 (version 2.2b)
 - **Ports**: 1501 (Variant LMK), 1502 (Key Block LMK)
-- **Key size**: RSA-2048
+- **Key sizes**: RSA-2048, RSA-4096
 - **Hash**: SHA-256 (`06`)
 - **Padding**: PKCS#1 v1.5 (`01`)
 

@@ -55,7 +55,7 @@ payshield:
   lmk-mode: keyblock           # "variant" or "keyblock" (default: keyblock)
   connect-timeout-ms: 5000     # TCP connect timeout in ms (default: 5000)
   read-timeout-ms: 10000       # TCP read timeout in ms (default: 10000)
-  length-prefix-enabled: true  # 2-byte length framing (default: true)
+  length-prefix-enabled: true  # Must be true — payShield 10K always uses 2-byte length framing; setting false throws at runtime
   header-length: 4             # Message header length: 0, 2, or 4 (default: 4)
 
   # --- Connection Pool ---
@@ -132,7 +132,9 @@ KeyGenerationResult generateKeyPair(int modulusBits)
 
 **Returns:** [`KeyGenerationResult`](#keyGenerationResult)
 
-**Throws:** `PayShieldException` on HSM error.
+**Throws:**
+- `IllegalArgumentException` if `modulusBits` is not `1024`, `2048`, or `4096`
+- `PayShieldException` on HSM error
 
 ---
 
@@ -165,7 +167,9 @@ SigningResult signMessage(byte[] messageData,
 
 **Returns:** [`SigningResult`](#signingresult)
 
-**Throws:** `PayShieldException` on HSM error.
+**Throws:**
+- `IllegalArgumentException` if `messageData` or `privateKeyBlob` is null or empty
+- `PayShieldException` on HSM error
 
 ---
 
@@ -198,7 +202,10 @@ VerificationResult verifySignature(byte[] signature,
 
 **Returns:** [`VerificationResult`](#verificationresult)
 
-**Throws:** `PayShieldException` on HSM communication error.
+**Throws:**
+- `IllegalArgumentException` if `signature`, `messageData`, or `publicKeyDer` is null or empty
+- `PayShieldException` on HSM communication error
+
 Note: a *signature mismatch* does **not** throw — it returns `VerificationResult.isValid() == false`.
 
 ---
@@ -246,7 +253,9 @@ CsrGenerationResult generateCsrPem(byte[] publicKeyDer,
 
 **Returns:** [`CsrGenerationResult`](#csrgenerationresult)
 
-**Throws:** `PayShieldException` on HSM error.
+**Throws:**
+- `IllegalArgumentException` if `publicKeyDer` or `privateKeyBlock` is null or empty, any subject field is blank, or `country` is not exactly 2 characters
+- `PayShieldException` on HSM error
 
 ---
 
@@ -385,17 +394,25 @@ it is consumed internally by `verifySignature()`.
 
 ## 7. Error Handling
 
-All failures throw `my.com.kambiz.hsm.exception.PayShieldException` (unchecked).
+Two exception types may be thrown — both unchecked:
+
+**`IllegalArgumentException`** — invalid input detected before the HSM is contacted (bad `modulusBits`, null/empty byte arrays, blank subject fields, wrong-length country code, `length-prefix-enabled=false`). No HSM call is made.
+
+**`PayShieldException`** — HSM communication or command failure. Carries `commandCode` and `errorCode`:
 
 ```java
 try {
     SigningResult result = hsmCryptoService.signMessage(data, privKey, isKeyBlock);
+} catch (IllegalArgumentException e) {
+    // bad input — fix the caller
 } catch (PayShieldException e) {
     String cmd   = e.getCommandCode();   // e.g. "EW"
     String code  = e.getErrorCode();     // e.g. "12"
     String msg   = e.getMessage();       // full description
 }
 ```
+
+**Startup validation** — misconfigured properties (blank host, invalid port, wrong `lmk-mode` value, etc.) cause the application context to fail at startup with a clear Bean Validation message. No silent misconfiguration.
 
 Common error codes:
 
