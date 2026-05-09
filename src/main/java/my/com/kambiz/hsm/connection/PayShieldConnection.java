@@ -5,7 +5,12 @@ import my.com.kambiz.hsm.exception.PayShieldException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.*;
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.Closeable;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 
@@ -92,15 +97,10 @@ public class PayShieldConnection implements Closeable {
                             String.format("Short read from HSM: expected %d bytes, got %d", respLen, response.length));
                 }
             } else {
-                // No length prefix: read until socket timeout or EOF
-                ByteArrayOutputStream bos = new ByteArrayOutputStream(1024);
-                byte[] buf = new byte[4096];
-                int n;
-                while ((n = in.read(buf)) != -1) {
-                    bos.write(buf, 0, n);
-                    if (in.available() == 0) break;
-                }
-                response = bos.toByteArray();
+                throw new PayShieldException(
+                        "length-prefix-enabled=false is not supported. " +
+                        "The payShield 10K always uses 2-byte length-prefix TCP framing. " +
+                        "Set payshield.length-prefix-enabled=true in your configuration.");
             }
 
             if (log.isDebugEnabled()) {

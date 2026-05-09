@@ -43,8 +43,14 @@ public class HsmCryptoService {
     /**
      * Generate an RSA key pair inside the HSM.
      * Mode-aware: constructs Variant or Key Block EI command based on config.
+     *
+     * @param modulusBits RSA key size — must be 1024, 2048, or 4096
      */
     public KeyGenerationResult generateKeyPair(int modulusBits) {
+        if (modulusBits != 1024 && modulusBits != 2048 && modulusBits != 4096) {
+            throw new IllegalArgumentException(
+                    "modulusBits must be 1024, 2048, or 4096; got: " + modulusBits);
+        }
         LmkMode mode = getLmkMode();
         log.info("=== Generating RSA-{} key pair via HSM (LMK mode: {}) ===", modulusBits, mode);
         String header = CommandUtils.generateHeader(properties.getHeaderLength());
@@ -99,6 +105,8 @@ public class HsmCryptoService {
      */
     public SigningResult signMessage(byte[] messageData, byte[] privateKeyBlob, boolean isKeyBlock,
                                      String hashId, String padMode) {
+        requireNonEmpty(messageData, "messageData");
+        requireNonEmpty(privateKeyBlob, "privateKeyBlob");
         LmkMode mode = getLmkMode();
         log.info("=== Signing message ({} bytes) via HSM (LMK mode: {}, inline key) ===",
                 messageData.length, mode);
@@ -130,6 +138,9 @@ public class HsmCryptoService {
      */
     public VerificationResult verifySignature(byte[] signature, byte[] messageData,
                                                byte[] publicKeyDer, String hashId, String padMode) {
+        requireNonEmpty(signature, "signature");
+        requireNonEmpty(messageData, "messageData");
+        requireNonEmpty(publicKeyDer, "publicKeyDer");
         LmkMode mode = getLmkMode();
         log.info("=== Verifying signature via HSM (LMK mode: {}) ===", mode);
         String header = CommandUtils.generateHeader(properties.getHeaderLength());
@@ -199,6 +210,17 @@ public class HsmCryptoService {
                                             String orgUnit, String locality,
                                             String state, String country,
                                             boolean pemOutput) {
+        requireNonEmpty(publicKeyDer, "publicKeyDer");
+        requireNonEmpty(privateKeyBlock, "privateKeyBlock");
+        requireNonBlank(commonName, "commonName");
+        requireNonBlank(organization, "organization");
+        requireNonBlank(orgUnit, "orgUnit");
+        requireNonBlank(locality, "locality");
+        requireNonBlank(state, "state");
+        if (country == null || country.length() != 2) {
+            throw new IllegalArgumentException(
+                    "country must be a 2-character ISO 3166-1 code (e.g. \"MY\"); got: " + country);
+        }
         LmkMode mode = getLmkMode();
         log.info("=== Generating CSR via HSM QE command (LMK mode: {}) ===", mode);
         log.info("Subject: CN={}, O={}, OU={}, L={}, ST={}, C={}",
@@ -263,9 +285,26 @@ public class HsmCryptoService {
     public String getPoolStats() { return connectionPool.getPoolStats(); }
 
     /**
-     * Execute a raw command against the HSM.
+     * Send a raw command byte array to the HSM and return the raw response.
+     * Intended for diagnostics (NC, NO) only — use the typed methods for all
+     * cryptographic operations.
      */
     public byte[] executeRaw(byte[] command) {
+        requireNonEmpty(command, "command");
         return connectionPool.execute(command);
+    }
+
+    // ===== PRIVATE HELPERS =====
+
+    private static void requireNonEmpty(byte[] value, String name) {
+        if (value == null || value.length == 0) {
+            throw new IllegalArgumentException(name + " must not be null or empty");
+        }
+    }
+
+    private static void requireNonBlank(String value, String name) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(name + " must not be null or blank");
+        }
     }
 }

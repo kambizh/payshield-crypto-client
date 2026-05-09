@@ -23,7 +23,8 @@ public class PayShieldConnectionFactory extends BasePooledObjectFactory<PayShiel
 
     @Override
     public PayShieldConnection create() {
-        log.debug("Creating new PayShield connection to {}:{}", properties.getHost(), properties.getPort());
+        log.debug("Creating new PayShield connection to {}:{} (LMK mode: {})",
+                properties.getHost(), properties.getActivePort(), properties.getLmkMode());
         return new PayShieldConnection(properties);
     }
 

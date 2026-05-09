@@ -32,6 +32,12 @@
             <optional>true</optional>
         </dependency>
 
+        <!-- Bean Validation (startup config checks) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
         <!-- Connection Pooling -->
         <dependency>
             <groupId>org.apache.commons</groupId>
