@@ -87,10 +87,9 @@ public class HsmCryptoService {
      *
      * @param messageData      data to sign
      * @param privateKeyBlob   LMK-encrypted private key blob returned by generateKeyPair()
-     * @param isKeyBlock       true if the key blob is in Key Block format (from KEYBLOCK mode)
      */
-    public SigningResult signMessage(byte[] messageData, byte[] privateKeyBlob, boolean isKeyBlock) {
-        return signMessage(messageData, privateKeyBlob, isKeyBlock,
+    public SigningResult signMessage(byte[] messageData, byte[] privateKeyBlob) {
+        return signMessage(messageData, privateKeyBlob,
                 properties.getDefaultHashId(), properties.getDefaultPadMode());
     }
 
@@ -99,15 +98,15 @@ public class HsmCryptoService {
      *
      * @param messageData      data to sign
      * @param privateKeyBlob   LMK-encrypted private key blob returned by generateKeyPair()
-     * @param isKeyBlock       true if the key blob is in Key Block format (from KEYBLOCK mode)
      * @param hashId           hash algorithm ID (e.g. "06" = SHA-256)
      * @param padMode          padding mode ID (e.g. "01" = PKCS#1 v1.5)
      */
-    public SigningResult signMessage(byte[] messageData, byte[] privateKeyBlob, boolean isKeyBlock,
+    public SigningResult signMessage(byte[] messageData, byte[] privateKeyBlob,
                                      String hashId, String padMode) {
         requireNonEmpty(messageData, "messageData");
         requireNonEmpty(privateKeyBlob, "privateKeyBlob");
         LmkMode mode = getLmkMode();
+        boolean isKeyBlock = mode == LmkMode.KEYBLOCK;
         log.info("=== Signing message ({} bytes) via HSM (LMK mode: {}, inline key) ===",
                 messageData.length, mode);
         String header = CommandUtils.generateHeader(properties.getHeaderLength());
