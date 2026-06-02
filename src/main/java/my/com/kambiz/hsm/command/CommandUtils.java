@@ -3,6 +3,7 @@ package my.com.kambiz.hsm.command;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Utility methods for constructing payShield 10K host commands.
@@ -13,16 +14,65 @@ import java.nio.charset.StandardCharsets;
  * Binary data is sent as raw bytes; ASCII fields are plain ASCII.
  * Lengths like "0009" are 4-digit zero-padded decimal ASCII strings.
  * Hex data in angle brackets in the docs is raw binary on the wire.
+ *
+ * Message Header:
+ *   The header is an opaque echo tag — the HSM returns it unchanged in the response.
+ *   It serves as a correlation ID for matching requests to responses in logs and audit trails.
+ *   For concurrent operations, each request should have a unique header value.
  */
 public class CommandUtils {
 
     private CommandUtils() {}
 
-    /** Generate a message header (zero-padded integer, e.g., "0310") */
+    /**
+     * Thread-safe counter for auto-generated headers.
+     * Wraps at the maximum value for the configured header length:
+     *   2-char header → 00-99 (100 values)
+     *   4-char header → 0000-9999 (10,000 values)
+     *
+     * The wrap-around is safe because headers are only for correlation/logging.
+     * By the time a counter wraps, the previous request with the same header
+     * has long since completed.
+     */
+    private static final AtomicInteger HEADER_COUNTER = new AtomicInteger(0);
+
+    /**
+     * Generate a unique message header for request correlation.
+     * Thread-safe: uses an atomic counter that wraps at the header length limit.
+     *
+     * @param headerLength configured header length (0, 2, or 4)
+     * @return unique header string (e.g., "0042", "1337")
+     */
     public static String generateHeader(int headerLength) {
         if (headerLength == 0) return "";
-        // Use a counter or fixed header; for POC we use "0000"
-        return String.format("%0" + headerLength + "d", 0);
+        int maxValue = (int) Math.pow(10, headerLength); // 100 for 2-char, 10000 for 4-char
+        int value = HEADER_COUNTER.getAndUpdate(v -> (v + 1) % maxValue);
+        return String.format("%0" + headerLength + "d", value);
+    }
+
+    /**
+     * Format a caller-provided correlation ID as a message header.
+     * Truncates or pads to fit the configured header length.
+     *
+     * Use this when iMochaRPPGateway wants to embed its own transaction ID
+     * (or part of it) into the HSM header for end-to-end traceability.
+     *
+     * @param correlationId caller's correlation/transaction ID
+     * @param headerLength  configured header length (0, 2, or 4)
+     * @return formatted header string
+     */
+    public static String formatHeader(String correlationId, int headerLength) {
+        if (headerLength == 0) return "";
+        if (correlationId == null || correlationId.isEmpty()) {
+            return generateHeader(headerLength);
+        }
+        // Take the last N characters (most unique part of a correlation ID)
+        String id = correlationId.replaceAll("[^A-Za-z0-9]", "");
+        if (id.length() >= headerLength) {
+            return id.substring(id.length() - headerLength);
+        }
+        // Pad with leading zeros
+        return String.format("%" + headerLength + "s", id).replace(' ', '0');
     }
 
     /** Format a 4-digit zero-padded decimal length */
