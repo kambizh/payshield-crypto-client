@@ -5,7 +5,12 @@ import my.com.kambiz.hsm.exception.PayShieldException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.*;
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.Closeable;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 
@@ -18,6 +23,11 @@ import java.net.Socket;
  *   followed by the 2-char command code and the command-specific fields.
  * 
  * The payShield returns responses in the same framing.
+ * 
+ * Port selection:
+ *   Variant LMK  → payshield.port (default 1501)
+ *   Key Block LMK → payshield.port-key-block (default 1502)
+ *   Determined by payshield.lmk-mode property via getActivePort().
  */
 public class PayShieldConnection implements Closeable {
 
@@ -31,21 +41,24 @@ public class PayShieldConnection implements Closeable {
 
     public PayShieldConnection(PayShieldProperties props) {
         try {
+            int activePort = props.getActivePort();
             this.socket = new Socket();
             this.socket.setSoTimeout(props.getReadTimeoutMs());
             this.socket.setTcpNoDelay(true);
             this.socket.setKeepAlive(true);
             this.socket.connect(
-                    new InetSocketAddress(props.getHost(), props.getPort()),
+                    new InetSocketAddress(props.getHost(), activePort),
                     props.getConnectTimeoutMs()
             );
             this.in = new BufferedInputStream(socket.getInputStream());
             this.out = new BufferedOutputStream(socket.getOutputStream());
             this.lengthPrefixEnabled = props.isLengthPrefixEnabled();
-            log.info("Connected to payShield 10K at {}:{}", props.getHost(), props.getPort());
+            log.info("Connected to payShield 10K at {}:{} (LMK mode: {})",
+                    props.getHost(), activePort, props.getLmkMode());
         } catch (IOException e) {
             throw new PayShieldException("Failed to connect to payShield at "
-                    + props.getHost() + ":" + props.getPort(), e);
+                    + props.getHost() + ":" + props.getActivePort()
+                    + " (LMK mode: " + props.getLmkMode() + ")", e);
         }
     }
 
@@ -84,15 +97,10 @@ public class PayShieldConnection implements Closeable {
                             String.format("Short read from HSM: expected %d bytes, got %d", respLen, response.length));
                 }
             } else {
-                // No length prefix: read until socket timeout or EOF
-                ByteArrayOutputStream bos = new ByteArrayOutputStream(1024);
-                byte[] buf = new byte[4096];
-                int n;
-                while ((n = in.read(buf)) != -1) {
-                    bos.write(buf, 0, n);
-                    if (in.available() == 0) break;
-                }
-                response = bos.toByteArray();
+                throw new PayShieldException(
+                        "length-prefix-enabled=false is not supported. " +
+                        "The payShield 10K always uses 2-byte length-prefix TCP framing. " +
+                        "Set payshield.length-prefix-enabled=true in your configuration.");
             }
 
             if (log.isDebugEnabled()) {

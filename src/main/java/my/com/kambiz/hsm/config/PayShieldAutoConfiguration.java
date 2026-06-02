@@ -11,7 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Spring Boot auto-configuration for the hsm-crypto-starter library.
+ * Spring Boot auto-configuration for the payshield-crypto-client library.
  * Automatically creates the connection pool and service beans when
  * the payshield.host property is set.
  */
@@ -25,7 +25,10 @@ public class PayShieldAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public PayShieldConnectionPool payShieldConnectionPool(PayShieldProperties properties) {
-        log.info("HSM Config -> {}:{}", properties.getHost(), properties.getPort());
+        LmkMode mode = properties.getResolvedLmkMode();
+        log.info("HSM Config -> host={}, activePort={}, lmkMode={}, variantPort={}, keyBlockPort={}",
+                properties.getHost(), properties.getActivePort(), mode,
+                properties.getPort(), properties.getPortKeyBlock());
         return new PayShieldConnectionPool(properties);
     }
 
