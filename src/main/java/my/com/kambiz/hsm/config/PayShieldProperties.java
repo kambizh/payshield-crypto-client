@@ -56,7 +56,7 @@ public class PayShieldProperties {
     @AssertTrue(message = "payshield.length-prefix-enabled must be true; payShield 10K requires 2-byte length-prefix framing")
     private boolean lengthPrefixEnabled = true;
 
-    /** Connection pool: max total connections */
+    /** Connection pool: max total connections (concurrent HSM operations) */
     @Min(value = 1, message = "payshield.pool-max-total must be at least 1")
     private int poolMaxTotal = 5;
 
@@ -67,6 +67,11 @@ public class PayShieldProperties {
     /** Connection pool: min idle connections */
     @Min(value = 0, message = "payshield.pool-min-idle must be >= 0")
     private int poolMinIdle = 1;
+
+    /** Connection pool: max wait time (ms) to borrow a connection before throwing an error.
+     *  Prevents indefinite blocking when all connections are in use. */
+    @Min(value = 100, message = "payshield.pool-borrow-timeout-ms must be at least 100ms")
+    private long poolBorrowTimeoutMs = 5000;
 
     /** User storage index for RSA private key (000-FFF) */
     private String privateKeyStorageIndex = "000";
@@ -91,8 +96,11 @@ public class PayShieldProperties {
     // ===== Key Block LMK specific defaults =====
 
     /**
-     * Mode of Use for EI key block generation.
-     * 'S' = Sign only, 'D' = Decrypt/unwrap, 'N' = No restriction
+     * Mode of Use for key block operations (EO, EY).
+     * 'S' = Sign only (Key Type 0)
+     * 'D' = Decrypt/unwrap only (Key Type 1)
+     * 'N' = No restriction (Key Type 2 & 4)
+     * Note: EI does NOT use this — EI auto-assigns Mode of Use from Key Type Indicator.
      */
     @Pattern(regexp = "[SDN]", message = "payshield.key-block-mode-of-use must be S, D, or N")
     private String keyBlockModeOfUse = "S";
@@ -153,6 +161,9 @@ public class PayShieldProperties {
 
     public int getPoolMinIdle() { return poolMinIdle; }
     public void setPoolMinIdle(int poolMinIdle) { this.poolMinIdle = poolMinIdle; }
+
+    public long getPoolBorrowTimeoutMs() { return poolBorrowTimeoutMs; }
+    public void setPoolBorrowTimeoutMs(long poolBorrowTimeoutMs) { this.poolBorrowTimeoutMs = poolBorrowTimeoutMs; }
 
     public String getPrivateKeyStorageIndex() { return privateKeyStorageIndex; }
     public void setPrivateKeyStorageIndex(String privateKeyStorageIndex) { this.privateKeyStorageIndex = privateKeyStorageIndex; }
