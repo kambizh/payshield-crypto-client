@@ -183,18 +183,22 @@ public class HsmCryptoService {
         return EYCommand.parseResponse(eyResp, properties.getHeaderLength());
     }
 
-    // ===== 4. CSR GENERATION (Key Block LMK only) =====
+    // ===== 4. CSR GENERATION =====
 
     /**
-     * Generate a Certificate Signing Request (CSR) via the native QE command.
-     * Requires Key Block LMK mode (port 1502) — the QE command only accepts
-     * 'S'-prefixed Key Block private keys.
+     * Generate a Certificate Signing Request (CSR). Mode-aware:
      *
-     * The HSM internally builds the PKCS#10 envelope and signs it — the private
-     * key never leaves the HSM boundary.
+     *   Key Block LMK → QE command: the HSM builds and signs the PKCS#10 envelope internally.
+     *                               Requires an S-prefixed TR-31 private key block.
+     *
+     *   Variant LMK   → Software:   TbsCertificationRequest is built in Java, then signed
+     *                               by the HSM via EW (SHA-256 + PKCS#1 v1.5). The PKCS#10
+     *                               structure is assembled in Java. The private key never
+     *                               leaves the HSM in either path.
      *
      * @param publicKeyDer    DER-encoded public key from generateKeyPair()
-     * @param privateKeyBlock S-prefixed Key Block private key from generateKeyPair()
+     * @param privateKeyBlob  LMK-encrypted private key blob from generateKeyPair()
+     *                        (S-prefixed Key Block for keyblock mode, raw blob for variant mode)
      * @param commonName      CN for the CSR subject
      * @param organization    O
      * @param orgUnit         OU
@@ -204,13 +208,13 @@ public class HsmCryptoService {
      * @param pemOutput       true=PEM format, false=Hex DER format
      * @return CSR data (PEM or Hex DER)
      */
-    public CsrGenerationResult generateCsr(byte[] publicKeyDer, byte[] privateKeyBlock,
+    public CsrGenerationResult generateCsr(byte[] publicKeyDer, byte[] privateKeyBlob,
                                             String commonName, String organization,
                                             String orgUnit, String locality,
                                             String state, String country,
                                             boolean pemOutput) {
         requireNonEmpty(publicKeyDer, "publicKeyDer");
-        requireNonEmpty(privateKeyBlock, "privateKeyBlock");
+        requireNonEmpty(privateKeyBlob, "privateKeyBlob");
         requireNonBlank(commonName, "commonName");
         requireNonBlank(organization, "organization");
         requireNonBlank(orgUnit, "orgUnit");
@@ -220,43 +224,88 @@ public class HsmCryptoService {
             throw new IllegalArgumentException(
                     "country must be a 2-character ISO 3166-1 code (e.g. \"MY\"); got: " + country);
         }
+
         LmkMode mode = getLmkMode();
-        log.info("=== Generating CSR via HSM QE command (LMK mode: {}) ===", mode);
+        log.info("=== Generating CSR (LMK mode: {}, format: {}) ===",
+                mode, pemOutput ? "PEM" : "HexDER");
         log.info("Subject: CN={}, O={}, OU={}, L={}, ST={}, C={}",
                 commonName, organization, orgUnit, locality, state, country);
 
+        if (mode == LmkMode.KEYBLOCK) {
+            return generateCsrKeyBlock(publicKeyDer, privateKeyBlob,
+                    commonName, organization, orgUnit, locality, state, country, pemOutput);
+        } else {
+            return generateCsrVariant(publicKeyDer, privateKeyBlob,
+                    commonName, organization, orgUnit, locality, state, country, pemOutput);
+        }
+    }
+
+    /**
+     * Key Block path: delegate to QE command.
+     * QE handles signing inside the HSM; the private key blob must be S-prefixed.
+     */
+    private CsrGenerationResult generateCsrKeyBlock(byte[] publicKeyDer, byte[] privateKeyBlob,
+                                                      String cn, String o, String ou,
+                                                      String l, String st, String c,
+                                                      boolean pemOutput) {
+        log.info("CSR path: QE command (Key Block LMK)");
         String header = CommandUtils.generateHeader(properties.getHeaderLength());
 
-        byte[] qeCmd;
-        if (pemOutput) {
-            qeCmd = QECommand.buildPem(header, publicKeyDer, privateKeyBlock,
-                    commonName, organization, orgUnit, locality, state, country);
-        } else {
-            qeCmd = QECommand.buildDer(header, publicKeyDer, privateKeyBlock,
-                    commonName, organization, orgUnit, locality, state, country);
-        }
+        byte[] qeCmd = pemOutput
+                ? QECommand.buildPem(header, publicKeyDer, privateKeyBlob, cn, o, ou, l, st, c)
+                : QECommand.buildDer(header, publicKeyDer, privateKeyBlob, cn, o, ou, l, st, c);
 
         log.debug("QE command length: {} bytes", qeCmd.length);
         byte[] qeResp = connectionPool.execute(qeCmd);
 
         CsrGenerationResult result = QECommand.parseResponse(qeResp, properties.getHeaderLength());
-        log.info("QE success: CSR generated, {} chars, format={}",
-                result.getCsrLength(), pemOutput ? "PEM" : "HexDER");
-
+        log.info("QE success: CSR {} chars, format={}", result.getCsrLength(), pemOutput ? "PEM" : "HexDER");
         return result;
     }
 
     /**
-     * Generate CSR with PEM output using default hash (SHA-256) and padding (PKCS#1 v1.5).
-     *
-     * @param publicKeyDer    DER-encoded public key from generateKeyPair()
-     * @param privateKeyBlock S-prefixed Key Block private key from generateKeyPair()
+     * Variant path: build TBS in software, sign with EW, assemble PKCS#10 in software.
+     * Uses SHA-256 + PKCS#1 v1.5 (sha256WithRSAEncryption) — same as QE default.
      */
-    public CsrGenerationResult generateCsrPem(byte[] publicKeyDer, byte[] privateKeyBlock,
+    private CsrGenerationResult generateCsrVariant(byte[] publicKeyDer, byte[] privateKeyBlob,
+                                                     String cn, String o, String ou,
+                                                     String l, String st, String c,
+                                                     boolean pemOutput) {
+        log.info("CSR path: software build + EW signing (Variant LMK)");
+
+        // 1. Build Subject DER and TbsCertificationRequest
+        byte[] subjectDer = SoftwareCsrBuilder.buildSubjectDer(cn, o, ou, l, st, c);
+        byte[] tbsDer = SoftwareCsrBuilder.buildTbs(subjectDer, publicKeyDer);
+        log.debug("TbsCertificationRequest: {} bytes", tbsDer.length);
+
+        // 2. Sign TBS via HSM EW command (SHA-256 + PKCS#1 v1.5)
+        SigningResult sigResult = signMessage(tbsDer, privateKeyBlob, "06", "01");
+        byte[] signature = sigResult.getSignature();
+        log.debug("EW signature: {} bytes", signature.length);
+
+        // 3. Assemble the full PKCS#10 CertificationRequest DER
+        byte[] csrDer = SoftwareCsrBuilder.buildCsr(tbsDer, signature);
+
+        String csrData = pemOutput
+                ? SoftwareCsrBuilder.toPem(csrDer)
+                : SoftwareCsrBuilder.toHex(csrDer);
+
+        log.info("Software CSR success: {} bytes DER, {} chars output, format={}",
+                csrDer.length, csrData.length(), pemOutput ? "PEM" : "HexDER");
+        return new CsrGenerationResult(csrData, csrData.length());
+    }
+
+    /**
+     * Generate CSR in PEM format. Mode-aware — works for both Variant and Key Block.
+     *
+     * @param publicKeyDer   DER-encoded public key from generateKeyPair()
+     * @param privateKeyBlob LMK-encrypted private key blob from generateKeyPair()
+     */
+    public CsrGenerationResult generateCsrPem(byte[] publicKeyDer, byte[] privateKeyBlob,
                                                String commonName, String organization,
                                                String orgUnit, String locality,
                                                String state, String country) {
-        return generateCsr(publicKeyDer, privateKeyBlock,
+        return generateCsr(publicKeyDer, privateKeyBlob,
                 commonName, organization, orgUnit, locality, state, country, true);
     }
 
