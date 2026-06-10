@@ -332,6 +332,8 @@ public class HsmCryptoService {
 
     public String getPoolStats() { return connectionPool.getPoolStats(); }
 
+    public java.util.Map<String, Object> getDetailedPoolStats() { return connectionPool.getDetailedPoolStats(); }
+
     /**
      * Send a raw command byte array to the HSM and return the raw response.
      * Intended for diagnostics (NC, NO) only — use the typed methods for all

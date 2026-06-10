@@ -160,10 +160,49 @@ public class PayShieldConnectionPool {
         pool.close();
     }
 
-    /** Pool statistics for monitoring and alerting. */
+    /** One-line pool snapshot string for log lines. */
     public String getPoolStats() {
         return String.format("active=%d, idle=%d, waiting=%d, maxTotal=%d",
                 pool.getNumActive(), pool.getNumIdle(), pool.getNumWaiters(), pool.getMaxTotal());
+    }
+
+    /**
+     * Structured pool snapshot for REST responses and stress-test reporting.
+     *
+     * Instant counters (point-in-time):
+     *   active   – connections currently borrowed by threads
+     *   idle     – connections sitting idle, ready for immediate use
+     *   waiting  – threads blocked waiting for a connection
+     *   maxTotal – configured pool ceiling
+     *
+     * Cumulative counters (since JVM start / pool creation):
+     *   totalBorrows   – every successful borrowObject() call
+     *   totalReturns   – every returnObject() call (should track borrows)
+     *   totalCreated   – physical TCP connections opened
+     *   totalDestroyed – physical TCP connections closed / invalidated
+     *
+     * Wait-time metrics (cumulative, ms):
+     *   meanBorrowWaitMs – rolling mean of time threads spent waiting for a borrow
+     *   maxBorrowWaitMs  – worst-case borrow wait seen so far
+     *
+     * Under a concurrent stress test:
+     *   - (totalBorrowsAfter - totalBorrowsBefore) == expected HSM calls
+     *   - maxBorrowWaitMs > 0 → pool was contended (connections were shared)
+     *   - totalCreated > 1    → pool scaled up from the min-idle baseline
+     */
+    public java.util.Map<String, Object> getDetailedPoolStats() {
+        java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("active",           pool.getNumActive());
+        m.put("idle",             pool.getNumIdle());
+        m.put("waiting",          pool.getNumWaiters());
+        m.put("maxTotal",         pool.getMaxTotal());
+        m.put("totalBorrows",     pool.getBorrowedCount());
+        m.put("totalReturns",     pool.getReturnedCount());
+        m.put("totalCreated",     pool.getCreatedCount());
+        m.put("totalDestroyed",   pool.getDestroyedCount());
+        m.put("meanBorrowWaitMs", Math.round(pool.getMeanBorrowWaitTimeMillis()));
+        m.put("maxBorrowWaitMs",  pool.getMaxBorrowWaitTimeMillis());
+        return m;
     }
 
     /** Number of connections currently in use by threads. */
