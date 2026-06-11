@@ -1,9 +1,9 @@
-# payshield-crypto-client — API Specification
+# payshield-crypto-client — Library Specification
 
-A Spring Boot auto-configuration library that exposes Thales payShield 10K HSM
-cryptographic operations over TCP. The library is **stateless** — it issues commands
-to the HSM and returns results. The caller is responsible for persisting any key
-material between calls.
+A Spring Boot auto-configuration library that wraps Thales payShield 10K HSM
+cryptographic operations over TCP and exposes them as injectable Java beans.
+The library is **stateless** — it issues commands to the HSM and returns results.
+The caller is responsible for persisting any key material between calls.
 
 ---
 
@@ -13,7 +13,7 @@ material between calls.
 2. [Configuration](#2-configuration)
 3. [LMK Modes](#3-lmk-modes)
 4. [Auto-wired Bean](#4-auto-wired-bean)
-5. [API Reference](#5-api-reference)
+5. [Method Reference](#5-method-reference)
    - [generateKeyPair](#51-generatekeypair)
    - [signMessage](#52-signmessage)
    - [verifySignature](#53-verifysignature)
@@ -113,7 +113,7 @@ customise behaviour.
 
 ---
 
-## 5. API Reference
+## 5. Method Reference
 
 All methods are on `my.com.kambiz.hsm.service.HsmCryptoService`.
 
