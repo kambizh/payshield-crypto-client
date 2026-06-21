@@ -1,5 +1,6 @@
-package my.com.kambiz.hsm.command;
+package my.com.kambiz.hsm.crypto;
 
+import my.com.kambiz.hsm.command.CommandUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

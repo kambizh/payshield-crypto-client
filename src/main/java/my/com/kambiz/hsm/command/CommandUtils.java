@@ -80,15 +80,40 @@ public class CommandUtils {
         return String.format("%04d", length);
     }
 
-    /** Convert hex string to byte array */
+    /**
+     * Convert a hex string to a byte array, with strict validation.
+     *
+     * Whitespace (spaces, tabs, newlines) is stripped for convenience, but the
+     * remaining input must be well-formed: an even number of characters and only
+     * hex digits. Malformed input throws {@link IllegalArgumentException} rather than
+     * being silently padded or partially parsed — this matters for cryptographic
+     * material, where a mangled byte sequence must never be accepted.
+     *
+     * @throws IllegalArgumentException if the input is null/empty, has an odd length,
+     *                                  or contains a non-hex character
+     */
     public static byte[] hexToBytes(String hex) {
-        hex = hex.replaceAll("\\s+", "");
-        if (hex.length() % 2 != 0) {
-            hex = "0" + hex;
+        if (hex == null) {
+            throw new IllegalArgumentException("hex input must not be null");
         }
-        byte[] bytes = new byte[hex.length() / 2];
+        String cleaned = hex.replaceAll("\\s+", "");
+        if (cleaned.isEmpty()) {
+            throw new IllegalArgumentException("hex input must not be empty");
+        }
+        if (cleaned.length() % 2 != 0) {
+            throw new IllegalArgumentException(
+                    "hex input must have an even number of digits (got " + cleaned.length() + ")");
+        }
+        byte[] bytes = new byte[cleaned.length() / 2];
         for (int i = 0; i < bytes.length; i++) {
-            bytes[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+            int hi = Character.digit(cleaned.charAt(i * 2), 16);
+            int lo = Character.digit(cleaned.charAt(i * 2 + 1), 16);
+            if (hi < 0 || lo < 0) {
+                int badPos = hi < 0 ? i * 2 : i * 2 + 1;
+                throw new IllegalArgumentException(
+                        "hex input contains a non-hex character at position " + badPos);
+            }
+            bytes[i] = (byte) ((hi << 4) | lo);
         }
         return bytes;
     }
