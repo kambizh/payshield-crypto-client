@@ -3,6 +3,7 @@ package my.com.kambiz.hsm.crypto;
 import my.com.kambiz.hsm.exception.PayShieldException;
 import my.com.kambiz.hsm.model.VerificationResult;
 
+import java.io.ByteArrayOutputStream;
 import java.security.InvalidKeyException;
 import java.security.KeyFactory;
 import java.security.NoSuchAlgorithmException;
@@ -67,12 +68,23 @@ public final class SoftwareSignatureVerifier {
         try {
             PublicKey publicKey;
             try {
+                // Try X.509 SubjectPublicKeyInfo format first (standard)
                 publicKey = KeyFactory.getInstance("RSA")
                         .generatePublic(new X509EncodedKeySpec(publicKeyDer));
             } catch (InvalidKeySpecException e) {
-                throw new IllegalArgumentException(
-                        "publicKeyDer is not a valid RSA SubjectPublicKeyInfo (X.509) key. "
-                        + "EC and other key types are not supported by software verification.", e);
+                // payShield EI command returns PKCS#1 RSAPublicKey (inner structure only,
+                // starts with SEQUENCE { INTEGER modulus, INTEGER exponent }) without the
+                // X.509 SubjectPublicKeyInfo AlgorithmIdentifier wrapper.
+                // Wrap it transparently so the JVM can accept it.
+                try {
+                    publicKey = KeyFactory.getInstance("RSA")
+                            .generatePublic(new X509EncodedKeySpec(pkcs1ToSubjectPublicKeyInfo(publicKeyDer)));
+                } catch (Exception e2) {
+                    throw new IllegalArgumentException(
+                            "publicKeyDer is not a valid RSA public key in either X.509 SubjectPublicKeyInfo "
+                            + "or PKCS#1 RSAPublicKey format. "
+                            + "EC and other key types are not supported by software verification.", e);
+                }
             }
 
             Signature verifier;
@@ -116,5 +128,57 @@ public final class SoftwareSignatureVerifier {
             throw new PayShieldException(
                     "Software signature verification failed: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Wraps a PKCS#1 RSAPublicKey DER structure in an X.509 SubjectPublicKeyInfo envelope
+     * so the JVM's KeyFactory can accept it.
+     *
+     * payShield's EI command returns the public key as a bare PKCS#1 RSAPublicKey
+     * (SEQUENCE { INTEGER modulus, INTEGER exponent }) without the SubjectPublicKeyInfo
+     * wrapper (AlgorithmIdentifier + BIT STRING). This method adds that wrapper.
+     *
+     * Result structure:
+     *   SEQUENCE {
+     *     SEQUENCE { OID rsaEncryption, NULL }   -- AlgorithmIdentifier
+     *     BIT STRING { 0x00, <pkcs1Key bytes> }  -- public key bits
+     *   }
+     */
+    private static byte[] pkcs1ToSubjectPublicKeyInfo(byte[] pkcs1Key) {
+        // Fixed RSA AlgorithmIdentifier: SEQUENCE { OID 1.2.840.113549.1.1.1, NULL }
+        byte[] algId = {
+            0x30, 0x0D,
+            0x06, 0x09, 0x2A, (byte)0x86, 0x48, (byte)0x86, (byte)0xF7, 0x0D, 0x01, 0x01, 0x01,
+            0x05, 0x00
+        };
+
+        // BIT STRING content = unused-bits byte (0x00) + PKCS#1 key bytes
+        int bitStringContentLen = 1 + pkcs1Key.length;
+        byte[] bitStringLenBytes = encodeDerLength(bitStringContentLen);
+
+        // Outer SEQUENCE content = algId + BIT STRING tag + BIT STRING length + BIT STRING value
+        int outerContentLen = algId.length + 1 + bitStringLenBytes.length + bitStringContentLen;
+        byte[] outerLenBytes = encodeDerLength(outerContentLen);
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream(1 + outerLenBytes.length + outerContentLen);
+        try {
+            out.write(0x30);              // SEQUENCE tag
+            out.write(outerLenBytes);
+            out.write(algId);
+            out.write(0x03);              // BIT STRING tag
+            out.write(bitStringLenBytes);
+            out.write(0x00);              // no unused bits
+            out.write(pkcs1Key);
+        } catch (Exception e) {
+            throw new IllegalStateException("Unreachable: ByteArrayOutputStream never throws", e);
+        }
+        return out.toByteArray();
+    }
+
+    /** Encode a DER length field (1-byte short form or 2/3-byte long form). */
+    private static byte[] encodeDerLength(int len) {
+        if (len < 0x80)   return new byte[] { (byte) len };
+        if (len < 0x100)  return new byte[] { (byte) 0x81, (byte) len };
+        return new byte[] { (byte) 0x82, (byte)(len >> 8), (byte)(len & 0xFF) };
     }
 }

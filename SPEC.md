@@ -17,10 +17,12 @@ The caller is responsible for persisting any key material between calls.
    - [generateKeyPair](#51-generatekeypair)
    - [signMessage](#52-signmessage)
    - [verifySignature](#53-verifysignature)
-   - [generateCsr / generateCsrPem](#54-generatecsr--generatecsrpem)
-   - [importPublicKey](#55-importpublickey)
-   - [Diagnostics](#56-diagnostics)
-   - [Utility](#57-utility)
+   - [importPublicKeyForVerification](#54-importpublickeyforverification)
+   - [verifySignatureOffHsm](#55-verifysignatureoffhsm)
+   - [generateCsr / generateCsrPem](#56-generatecsr--generatecsrpem)
+   - [importPublicKey](#57-importpublickey)
+   - [Diagnostics](#58-diagnostics)
+   - [Utility](#59-utility)
 6. [Return Types](#6-return-types)
 7. [Error Handling](#7-error-handling)
 8. [Typical Flows](#8-typical-flows)
@@ -175,8 +177,9 @@ SigningResult signMessage(byte[] messageData,
 
 ### 5.3 `verifySignature`
 
-Verify an RSA digital signature. Internally performs EO (import public key) then
-EY (verify). Both steps are transparent to the caller.
+Verify an RSA digital signature against the HSM. Three overloads are available.
+
+**Single-step (EO + EY per call)** — simplest form, each call imports the public key and verifies:
 
 ```java
 // Uses default hash and padding from configuration
@@ -192,29 +195,107 @@ VerificationResult verifySignature(byte[] signature,
                                    String padMode)
 ```
 
+**Two-step (EY only)** — caller supplies a `PublicKeyImportResult` obtained once from
+[`importPublicKeyForVerification`](#54-importpublickeyforverification), skipping the EO round-trip on every call:
+
+```java
+VerificationResult verifySignature(byte[] signature,
+                                   byte[] messageData,
+                                   PublicKeyImportResult importedKey,
+                                   String hashId,
+                                   String padMode)
+```
+
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `signature` | `byte[]` | Signature bytes from `SigningResult.getSignature()` |
 | `messageData` | `byte[]` | Original message bytes that were signed |
 | `publicKeyDer` | `byte[]` | DER-encoded public key from `KeyGenerationResult.getPublicKeyDer()` |
+| `importedKey` | `PublicKeyImportResult` | Result from `importPublicKeyForVerification()` — reused across calls |
 | `hashId` | `String` | Must match the hash used when signing |
 | `padMode` | `String` | Must match the padding used when signing |
 
 **Returns:** [`VerificationResult`](#verificationresult)
 
 **Throws:**
-- `IllegalArgumentException` if `signature`, `messageData`, or `publicKeyDer` is null or empty
+- `IllegalArgumentException` if `signature`, `messageData`, or `publicKeyDer` is null or empty; or `importedKey` is null
 - `PayShieldException` on HSM communication error
 
 Note: a *signature mismatch* does **not** throw — it returns `VerificationResult.isValid() == false`.
 
 ---
 
-### 5.4 `generateCsr` / `generateCsrPem`
+### 5.4 `importPublicKeyForVerification`
 
-Generate a PKCS#10 Certificate Signing Request via the HSM QE command.
-**Requires Key Block LMK mode** (`lmk-mode=keyblock`). The private key is used
-inside the HSM to sign the CSR — it never leaves the HSM boundary.
+Import a DER-encoded RSA public key into the HSM (EO command) with Mode of Use = `'V'`
+(verification only). Returns a `PublicKeyImportResult` the caller can hold and reuse across
+multiple `verifySignature` calls — eliminating the repeated EO round-trip for each message.
+
+```java
+PublicKeyImportResult importPublicKeyForVerification(byte[] publicKeyDer)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `publicKeyDer` | `byte[]` | DER-encoded SubjectPublicKeyInfo (X.509) RSA public key |
+
+**Returns:** [`PublicKeyImportResult`](#publickeyimportresult) — pass this to the two-step `verifySignature` overload.
+
+**Throws:**
+- `IllegalArgumentException` if `publicKeyDer` is null or empty
+- `PayShieldException` on HSM error
+
+> The returned result stays valid as long as the HSM's LMK is unchanged. If the LMK is
+> reloaded or replaced, call this method again — the old MAC (Variant) or key block (Key Block)
+> will no longer be accepted by EY.
+
+> Use `importPublicKey()` instead if you need Mode of Use = `'N'` (no restriction).
+
+---
+
+### 5.5 `verifySignatureOffHsm`
+
+Verify an RSA digital signature entirely in software on the JVM, without contacting the HSM.
+No LMK, no TCP connection, no HSM license consumed. Use this for high-volume inbound
+verification where HSM round-trips are not needed.
+
+```java
+// Uses default hash and padding from configuration
+VerificationResult verifySignatureOffHsm(byte[] signature,
+                                         byte[] messageData,
+                                         byte[] publicKeyDer)
+
+// Explicit hash and padding
+VerificationResult verifySignatureOffHsm(byte[] signature,
+                                         byte[] messageData,
+                                         byte[] publicKeyDer,
+                                         String hashId,
+                                         String padMode)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `signature` | `byte[]` | Raw signature bytes |
+| `messageData` | `byte[]` | Original signed message bytes |
+| `publicKeyDer` | `byte[]` | DER-encoded SubjectPublicKeyInfo (X.509) RSA public key |
+| `hashId` | `String` | payShield hash ID — supported: `"01"` `"05"` `"06"` `"07"` `"08"` |
+| `padMode` | `String` | payShield padding ID — supported: `"01"` (PKCS#1 v1.5), `"04"` (PSS) |
+
+**Returns:** [`VerificationResult`](#verificationresult)
+
+**Throws:**
+- `IllegalArgumentException` if any parameter is null or empty, the key is not RSA, or an unsupported `hashId`/`padMode` is supplied
+- A structurally malformed signature returns `VerificationResult.isValid() == false` rather than throwing
+
+---
+
+### 5.6 `generateCsr` / `generateCsrPem`
+
+Generate a PKCS#10 Certificate Signing Request. Mode-aware — the private key never
+leaves the HSM boundary in either path:
+
+- **Key Block LMK** → HSM QE command: the HSM builds and signs the PKCS#10 envelope internally.
+- **Variant LMK** → Software CSR assembly: the TBS structure is built in Java, then signed by the HSM via EW (SHA-256 + PKCS#1 v1.5), and the PKCS#10 envelope is assembled in Java.
 
 ```java
 // Full control over output format
@@ -259,11 +340,10 @@ CsrGenerationResult generateCsrPem(byte[] publicKeyDer,
 
 ---
 
-### 5.5 `importPublicKey`
+### 5.7 `importPublicKey`
 
-Import a DER-encoded RSA public key into the HSM (EO command). Returns the
-HSM-protected form of the key. Useful when you need to verify signatures using
-a public key from an external source.
+Import a DER-encoded RSA public key into the HSM (EO command) with Mode of Use = `'N'`
+(no restriction). Returns the HSM-protected form of the key.
 
 ```java
 PublicKeyImportResult importPublicKey(byte[] publicKeyDer)
@@ -277,13 +357,12 @@ PublicKeyImportResult importPublicKey(byte[] publicKeyDer)
 
 **Throws:** `PayShieldException` on HSM error.
 
-> Note: `verifySignature()` calls this internally. You only need `importPublicKey()`
-> directly if you want to reuse an imported key across multiple verification calls
-> without re-importing it each time.
+> For verification use cases, prefer [`importPublicKeyForVerification()`](#54-importpublickeyforverification),
+> which uses Mode of Use = `'V'` and is the method `verifySignature()` calls internally.
 
 ---
 
-### 5.6 Diagnostics
+### 5.8 Diagnostics
 
 These are static utility methods on `DiagnosticCommands`. They require an
 `HsmCryptoService` to send the raw command bytes.
@@ -307,7 +386,7 @@ in your configuration (default `"0000"` and `4`).
 
 ---
 
-### 5.7 Utility
+### 5.9 Utility
 
 ```java
 // Active LMK mode
