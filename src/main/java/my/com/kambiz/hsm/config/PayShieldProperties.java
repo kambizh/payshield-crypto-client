@@ -39,6 +39,16 @@ public class PayShieldProperties {
     @Pattern(regexp = "variant|keyblock", message = "payshield.lmk-mode must be 'variant' or 'keyblock'")
     private String lmkMode = "keyblock";
 
+    /**
+     * Optional LMK Identifier for shared-port multi-LMK hosts (2 digits).
+     * When set, EI appends "%{id}" before the '#' section, e.g.:
+     *   00 → Variant   → ...%00#0000
+     *   01 → Key Block → ...%01#0000
+     * Leave blank to omit (port-based LMK selection, dual-port lab).
+     */
+    @Pattern(regexp = "|[0-9]{2}", message = "payshield.lmk-id must be blank or two digits (e.g. 00, 01)")
+    private String lmkId = "";
+
     /** Message header length configured on the HSM — must be 0, 2, or 4 */
     @Min(value = 0, message = "payshield.header-length must be 0, 2, or 4")
     @Max(value = 4, message = "payshield.header-length must be 0, 2, or 4")
@@ -126,6 +136,19 @@ public class PayShieldProperties {
 
     public String getLmkMode() { return lmkMode; }
     public void setLmkMode(String lmkMode) { this.lmkMode = lmkMode; }
+
+    public String getLmkId() { return lmkId; }
+    public void setLmkId(String lmkId) { this.lmkId = lmkId; }
+
+    /**
+     * Returns the LMK Identifier to embed in host commands, or null/blank to omit.
+     */
+    public String getResolvedLmkId() {
+        if (lmkId == null || lmkId.isBlank()) {
+            return null;
+        }
+        return lmkId;
+    }
 
     /**
      * Returns the resolved LmkMode enum.

@@ -14,19 +14,21 @@ import java.nio.charset.StandardCharsets;
  * Variant LMK command format:
  *   [Header] EI [KeyType:1N] [ModulusLength:4N] [EncodingRules:2N]
  *
- * Key Block LMK command format (adds '#' delimited section):
+ * Key Block LMK command format:
  *   [Header] EI [KeyType:1N] [ModulusLength:4N] [EncodingRules:2N]
- *   # [ModeOfUse:1A] [KeyVersion:2N] [Exportability:1A] [NumOptBlocks:2N]
+ *   # [KeyVersion:2N] [NumOptBlocks:2N]
  *
- * Example from Thales team:
- *   EI1102401#0000..  → EI + KeyType=1 + Len=1024 + Enc=01 + #N00N00
+ * Shared-port multi-LMK (optional): insert "%{LMK Identifier}" before '#':
+ *   Variant:   [Header] EI ... %00 #0000
+ *   Key Block: [Header] EI ... %01 #0000
+ * Example: 0000EI0204801%01#0000
  *
  * Response (EJ):
  *   Variant:  [Header] EJ [Error:2A] [PubKey:DER] [PrivKeyLen:4N]       [PrivKey:bytes]
  *   KeyBlock: [Header] EJ [Error:2A] [PubKey:DER] [PrivKeyLen:4H=FFFF]  ['S' + PrivKey:keyblock]
  *
  * Key differences in Key Block mode:
- *   1. Build: '#' delimiter + Mode of Use + Key Version + Exportability + Num Optional Blocks
+ *   1. Build: optional "%{lmkId}" + '#' + Key Version + Num Optional Blocks
  *   2. Response: Private key length field is always "FFFF" (hex, reserved)
  *   3. Response: Private key blob starts with 'S' prefix (Key Block scheme identifier)
  *   4. The 'S'-prefixed blob is what you pass back in EW for signing
@@ -40,10 +42,32 @@ public class EICommand {
     // ===== BUILD =====
 
     /**
-     * Build EI command for Variant LMK (legacy, port 1501).
-     * Unchanged from original.
+     * Build EI command for Variant LMK (legacy / dual-port).
+     * No LMK Identifier and no '#' section.
      */
     public static byte[] build(String header, int keyType, int modulusBits, String encoding) {
+        return buildVariant(header, keyType, modulusBits, encoding, null, "00");
+    }
+
+    /**
+     * Build EI for Variant with optional LMK Identifier (shared-port).
+     * When {@code lmkId} is set (e.g. "00"):
+     *   EI ... %00 #0000
+     * When blank: classic Variant with no '%' / '#' trailer.
+     */
+    public static byte[] buildVariant(String header, int keyType, int modulusBits, String encoding,
+                                      String lmkId, String keyVersion) {
+        if (lmkId != null && !lmkId.isBlank()) {
+            log.info("Building EI command for Variant LMK with LMK id={}: keyType={}, bits={}",
+                    lmkId, keyType, modulusBits);
+            return CommandUtils.buildCommand(header, "EI",
+                    String.valueOf(keyType),
+                    String.format("%04d", modulusBits),
+                    encoding,
+                    "%", lmkId,
+                    "#", keyVersion != null ? keyVersion : "00", "00"
+            );
+        }
         return CommandUtils.buildCommand(header, "EI",
                 String.valueOf(keyType),
                 String.format("%04d", modulusBits),
@@ -52,8 +76,8 @@ public class EICommand {
     }
 
     /**
-     * Build EI command for Key Block LMK (port 1502).
-     * Appends the '#' delimiter and key block attribute fields.
+     * Build EI command for Key Block LMK (dual-port, no LMK Identifier).
+     * Appends '#' + Key Version + Num Optional Blocks.
      *
      * IMPORTANT: The EI command's Key Block section is DIFFERENT from other commands
      * like EO/FY. Per the spec (page 189), EI only has TWO fields after '#':
@@ -61,47 +85,65 @@ public class EICommand {
      *   2. Number of Optional Blocks (2N)
      *
      * Mode of Use and Exportability are NOT specified here — they are automatically
-     * determined by the Key Type Indicator:
-     *   KeyType 0 (Signature) → Mode='S', KeyUsage='03'
-     *   KeyType 1 (KeyMgmt)   → Mode='D', KeyUsage='03'
-     *   KeyType 2 (Both)      → Mode='N', KeyUsage='03'
-     *   KeyType 3 (ICC)       → Mode='S', KeyUsage='04'
-     *   KeyType 4 (DataEnc)   → Mode='N', KeyUsage='06'
-     *   KeyType 5 (PINEnc)    → Mode='D', KeyUsage='05'
-     * Exportability defaults to 'N' (override via '&' delimiter, separate section).
-     *
-     * @param header        message header string (e.g. "0000")
-     * @param keyType       0=Signature, 1=KeyMgmt, 2=Both, 3=ICC, 4=DataEnc, 5=PINEnc
-     * @param modulusBits   RSA modulus length: 320-4096 (Key Block supports up to 4096)
-     * @param encoding      01=DER ASN.1 unsigned, 02=DER ASN.1 2's complement
-     * @param keyVersion    Key version "00"-"99"
+     * determined by the Key Type Indicator.
      */
     public static byte[] buildKeyBlock(String header, int keyType, int modulusBits, String encoding,
                                        String keyVersion) {
-        log.info("Building EI command for Key Block LMK: keyType={}, bits={}, version={}",
-                keyType, modulusBits, keyVersion);
+        return buildKeyBlock(header, keyType, modulusBits, encoding, keyVersion, null);
+    }
 
+    /**
+     * Build EI command for Key Block LMK, optionally with LMK Identifier for shared-port hosts.
+     *
+     * When {@code lmkId} is set (e.g. "01"), the wire format is:
+     *   EI [KeyType] [ModulusLength] [Encoding] % [lmkId] # [KeyVersion] [NumOptBlocks]
+     * Example: 0000EI0204801%01#0000
+     *
+     * When {@code lmkId} is null/blank (dual-port lab):
+     *   EI [KeyType] [ModulusLength] [Encoding] # [KeyVersion] [NumOptBlocks]
+     */
+    public static byte[] buildKeyBlock(String header, int keyType, int modulusBits, String encoding,
+                                       String keyVersion, String lmkId) {
+        log.info("Building EI command for Key Block LMK: keyType={}, bits={}, version={}, lmkId={}",
+                keyType, modulusBits, keyVersion, lmkId == null || lmkId.isBlank() ? "(none)" : lmkId);
+
+        if (lmkId != null && !lmkId.isBlank()) {
+            return CommandUtils.buildCommand(header, "EI",
+                    String.valueOf(keyType),
+                    String.format("%04d", modulusBits),
+                    encoding,
+                    "%", lmkId,
+                    "#", keyVersion, "00"
+            );
+        }
         return CommandUtils.buildCommand(header, "EI",
-                String.valueOf(keyType),                  // Key type indicator
-                String.format("%04d", modulusBits),       // Modulus length
-                encoding,                                  // Encoding rules
-                "#",                                       // Key Block delimiter (mandatory for Key Block LMK)
-                keyVersion,                                // Key Version Number (2N)
-                "00"                                       // Number of Optional Blocks (2N) — none
+                String.valueOf(keyType),
+                String.format("%04d", modulusBits),
+                encoding,
+                "#", keyVersion, "00"
         );
     }
 
     /**
      * Convenience: build EI with mode-aware dispatch.
      * Selects Variant or Key Block format based on the LmkMode.
+     * Pass a non-blank {@code lmkId} for shared-port multi-LMK hosts.
+     */
+    public static byte[] build(String header, int keyType, int modulusBits, String encoding,
+                               LmkMode lmkMode, String keyVersion, String lmkId) {
+        if (lmkMode == LmkMode.KEYBLOCK) {
+            return buildKeyBlock(header, keyType, modulusBits, encoding, keyVersion, lmkId);
+        } else {
+            return buildVariant(header, keyType, modulusBits, encoding, lmkId, keyVersion);
+        }
+    }
+
+    /**
+     * Convenience: mode-aware build without LMK Identifier (dual-port).
      */
     public static byte[] build(String header, int keyType, int modulusBits, String encoding,
                                LmkMode lmkMode, String keyVersion) {
-        if (lmkMode == LmkMode.KEYBLOCK) {
-            return buildKeyBlock(header, keyType, modulusBits, encoding, keyVersion);
-        } else {
-            return build(header, keyType, modulusBits, encoding);
-        }
+        return build(header, keyType, modulusBits, encoding, lmkMode, keyVersion, null);
     }
 
     // ===== PARSE =====

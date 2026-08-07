@@ -2,13 +2,16 @@ package my.com.kambiz.hsm.service;
 
 import my.com.kambiz.hsm.command.*;
 import my.com.kambiz.hsm.config.LmkMode;
-import my.com.kambiz.hsm.crypto.*;
+import my.com.kambiz.hsm.config.PayShieldAutoConfiguration;
 import my.com.kambiz.hsm.config.PayShieldProperties;
 import my.com.kambiz.hsm.connection.PayShieldConnectionPool;
+import my.com.kambiz.hsm.crypto.*;
 import my.com.kambiz.hsm.exception.PayShieldException;
 import my.com.kambiz.hsm.model.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.nio.charset.StandardCharsets;
 
 /**
  * Stateless service for payShield 10K HSM operations.
@@ -57,17 +60,25 @@ public class HsmCryptoService {
         String header = CommandUtils.generateHeader(properties.getHeaderLength());
 
         byte[] eiCmd;
+        String lmkId = properties.getResolvedLmkId();
         if (mode == LmkMode.KEYBLOCK) {
             eiCmd = EICommand.buildKeyBlock(header, 0, modulusBits, "01",
-                    properties.getKeyBlockKeyVersion());
-            log.info("EI command (KEY BLOCK): keyType=0, bits={}, version={}",
-                    modulusBits, properties.getKeyBlockKeyVersion());
+                    properties.getKeyBlockKeyVersion(), lmkId);
+            log.info("EI command (KEY BLOCK): keyType=0, bits={}, version={}, lmkId={}",
+                    modulusBits, properties.getKeyBlockKeyVersion(),
+                    lmkId == null ? "(none)" : lmkId);
         } else {
-            eiCmd = EICommand.build(header, 0, modulusBits, "01");
-            log.info("EI command (VARIANT): keyType=0, bits={}", modulusBits);
+            eiCmd = EICommand.buildVariant(header, 0, modulusBits, "01", lmkId,
+                    properties.getKeyBlockKeyVersion());
+            log.info("EI command (VARIANT): keyType=0, bits={}, lmkId={}",
+                    modulusBits, lmkId == null ? "(none)" : lmkId);
         }
 
-        log.debug("EI command hex: {}", CommandUtils.bytesToHex(eiCmd));
+        // INFO so you can confirm the deployed JAR from nohup/server logs without enabling DEBUG
+        log.info("EI wire [{}] ascii={} hex={}",
+                PayShieldAutoConfiguration.BUILD_FEATURE_MARKER,
+                new String(eiCmd, StandardCharsets.US_ASCII),
+                CommandUtils.bytesToHex(eiCmd));
         byte[] eiResp = connectionPool.execute(eiCmd);
 
         // Parse response — auto-detects Variant vs Key Block from FFFF length field
