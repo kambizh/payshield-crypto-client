@@ -32,6 +32,9 @@ import java.nio.charset.StandardCharsets;
  *   3. User storage ref: "SK{index}" instead of "K{index}"
  *      ('S' = key block scheme, 'K' = index flag, then 3-hex-char index)
  *
+ * Shared-port multi-LMK: callers may append "%{lmkId}" via {@link CommandUtils#withLmkId}
+ * after building the body, e.g. ...;99FFFF[S-keyblock]%01
+ *
  * Response (EX) format is identical for both modes.
  */
 public class EWCommand {

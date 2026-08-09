@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 /**
  * Stateless service for payShield 10K HSM operations.
@@ -127,7 +128,18 @@ public class HsmCryptoService {
                 header, hashId, properties.getDefaultSigId(), padMode,
                 messageData, privateKeyBlob, isKeyBlock);
 
-        log.debug("EW command length: {} bytes", ewCmd.length);
+        String lmkId = properties.getResolvedLmkId();
+        ewCmd = CommandUtils.withLmkId(ewCmd, lmkId);
+
+        // INFO: confirm deployed JAR + whether %00/%01 was appended (tail only — body has binary key)
+        String tailHex = CommandUtils.bytesToHex(
+                Arrays.copyOfRange(ewCmd, Math.max(0, ewCmd.length - 8), ewCmd.length));
+        log.info("EW wire [{}] lmkId={} length={} tailHex={}",
+                PayShieldAutoConfiguration.BUILD_FEATURE_MARKER,
+                lmkId == null ? "(none)" : lmkId,
+                ewCmd.length,
+                tailHex);
+
         byte[] ewResp = connectionPool.execute(ewCmd);
 
         return EWCommand.parseResponse(ewResp, properties.getHeaderLength(), hashId, padMode);
@@ -168,8 +180,7 @@ public class HsmCryptoService {
     }
 
     /**
-     * Import a public key via EO specifically for signature verification
-     * (Key Block Mode of Use = 'V').
+     * Import a public key via EO specifically for signature verification.
      *
      * Do this ONCE per public key and cache the returned {@link PublicKeyImportResult}.
      * You can then call
@@ -180,8 +191,8 @@ public class HsmCryptoService {
      * reloaded/replaced, re-import: the old MAC (Variant) or key block (Key Block) will no
      * longer validate and EY would fail with a MAC/key-block error.
      *
-     * NOTE: this differs from {@link #importPublicKey(byte[])}, which imports with
-     * Mode of Use = 'N' (no restriction). For verification reuse, 'V' is the correct usage.
+     * Key Block Mode of Use = 'N' (no restriction), matching payShield EO host examples
+     * ({@code ~#N00N00} / {@code ~%01#N00N00}).
      *
      * @param publicKeyDer DER-encoded SubjectPublicKeyInfo (X.509) public key
      * @return import result to cache and reuse across EY verifications
@@ -190,7 +201,10 @@ public class HsmCryptoService {
         requireNonEmpty(publicKeyDer, "publicKeyDer");
         LmkMode mode = getLmkMode();
         log.info("Importing public key via EO for verification (mode: {})", mode);
-        PublicKeyImportResult result = executeEoImport(publicKeyDer, "V");
+        // Key Block Mode of Use 'N' (no restriction). 'V' (Verify) is valid in TR-31
+        // tables but payShield EO on Key Block LMK rejects some MoU values; reference
+        // host examples use '~#N00N00'. Wire becomes ...~%01#N00N00 when lmk-id is set.
+        PublicKeyImportResult result = executeEoImport(publicKeyDer, "N");
         log.info("EO success: {}", mode == LmkMode.KEYBLOCK
                 ? "pubKeyBlock=" + result.getPublicKeyBlock().length + " bytes (S-prefixed)"
                 : "MAC=" + result.getMacHex());
@@ -236,7 +250,17 @@ public class HsmCryptoService {
                     importedKey.getMac(), importedKey.getPublicKeyDer(), new byte[0]);
         }
 
-        log.debug("EY command hex: {}", CommandUtils.bytesToHex(eyCmd));
+        String lmkId = properties.getResolvedLmkId();
+        eyCmd = CommandUtils.withLmkId(eyCmd, lmkId);
+
+        String tailHex = CommandUtils.bytesToHex(
+                Arrays.copyOfRange(eyCmd, Math.max(0, eyCmd.length - 8), eyCmd.length));
+        log.info("EY wire [{}] lmkId={} length={} tailHex={}",
+                PayShieldAutoConfiguration.BUILD_FEATURE_MARKER,
+                lmkId == null ? "(none)" : lmkId,
+                eyCmd.length,
+                tailHex);
+
         byte[] eyResp = connectionPool.execute(eyCmd);
 
         return EYCommand.parseResponse(eyResp, properties.getHeaderLength());
@@ -364,7 +388,17 @@ public class HsmCryptoService {
                 ? QECommand.buildPem(header, publicKeyDer, privateKeyBlob, cn, o, ou, l, st, c)
                 : QECommand.buildDer(header, publicKeyDer, privateKeyBlob, cn, o, ou, l, st, c);
 
-        log.debug("QE command length: {} bytes", qeCmd.length);
+        String lmkId = properties.getResolvedLmkId();
+        qeCmd = CommandUtils.withLmkId(qeCmd, lmkId);
+
+        String tailHex = CommandUtils.bytesToHex(
+                Arrays.copyOfRange(qeCmd, Math.max(0, qeCmd.length - 8), qeCmd.length));
+        log.info("QE wire [{}] lmkId={} length={} tailHex={}",
+                PayShieldAutoConfiguration.BUILD_FEATURE_MARKER,
+                lmkId == null ? "(none)" : lmkId,
+                qeCmd.length,
+                tailHex);
+
         byte[] qeResp = connectionPool.execute(qeCmd);
 
         CsrGenerationResult result = QECommand.parseResponse(qeResp, properties.getHeaderLength());
@@ -435,9 +469,32 @@ public class HsmCryptoService {
     public java.util.Map<String, Object> getDetailedPoolStats() { return connectionPool.getDetailedPoolStats(); }
 
     /**
+     * Run NC (Perform Diagnostics). Applies {@code payshield.lmk-id} when set
+     * (shared-port), e.g. {@code 0000NC%01}.
+     *
+     * @return parsed ND fields (status, lmkCheckValue, firmwareNumber, …)
+     */
+    public java.util.Map<String, String> performDiagnostics() {
+        String header = CommandUtils.generateHeader(properties.getHeaderLength());
+        byte[] ncCmd = DiagnosticCommands.buildNC(header);
+
+        String lmkId = properties.getResolvedLmkId();
+        ncCmd = CommandUtils.withLmkId(ncCmd, lmkId);
+
+        String wireAscii = new String(ncCmd, StandardCharsets.US_ASCII);
+        log.info("NC wire [{}] lmkId={} ascii={}",
+                PayShieldAutoConfiguration.BUILD_FEATURE_MARKER,
+                lmkId == null ? "(none)" : lmkId,
+                wireAscii);
+
+        byte[] ncResp = connectionPool.execute(ncCmd);
+        return DiagnosticCommands.parseNCResponse(ncResp, properties.getHeaderLength());
+    }
+
+    /**
      * Send a raw command byte array to the HSM and return the raw response.
-     * Intended for diagnostics (NC, NO) only — use the typed methods for all
-     * cryptographic operations.
+     * Intended for diagnostics (NO) or commands not covered by typed methods —
+     * prefer {@link #performDiagnostics()} for NC so LMK id is applied.
      */
     public byte[] executeRaw(byte[] command) {
         requireNonEmpty(command, "command");
@@ -449,10 +506,28 @@ public class HsmCryptoService {
     private PublicKeyImportResult executeEoImport(byte[] publicKeyDer, String keyBlockModeOfUse) {
         LmkMode mode = getLmkMode();
         String header = CommandUtils.generateHeader(properties.getHeaderLength());
-        byte[] eoCmd = (mode == LmkMode.KEYBLOCK)
-                ? EOCommand.buildKeyBlock(header, publicKeyDer,
-                        keyBlockModeOfUse, properties.getKeyBlockKeyVersion(), properties.getKeyBlockExportability())
-                : EOCommand.build(header, publicKeyDer, new byte[0]);
+        String lmkId = properties.getResolvedLmkId();
+
+        byte[] eoCmd;
+        if (mode == LmkMode.KEYBLOCK) {
+            // Key Block: ...~%01#V00N00  (% before #, after ~)
+            eoCmd = EOCommand.buildKeyBlock(header, publicKeyDer,
+                    keyBlockModeOfUse, properties.getKeyBlockKeyVersion(),
+                    properties.getKeyBlockExportability(), lmkId);
+        } else {
+            // Variant: append %00 at end
+            eoCmd = CommandUtils.withLmkId(
+                    EOCommand.build(header, publicKeyDer, new byte[0]), lmkId);
+        }
+
+        String tailHex = CommandUtils.bytesToHex(
+                Arrays.copyOfRange(eoCmd, Math.max(0, eoCmd.length - 16), eoCmd.length));
+        log.info("EO wire [{}] lmkId={} length={} tailHex={}",
+                PayShieldAutoConfiguration.BUILD_FEATURE_MARKER,
+                lmkId == null ? "(none)" : lmkId,
+                eoCmd.length,
+                tailHex);
+
         byte[] eoResp = connectionPool.execute(eoCmd);
         return EOCommand.parseResponse(eoResp, properties.getHeaderLength(), mode);
     }

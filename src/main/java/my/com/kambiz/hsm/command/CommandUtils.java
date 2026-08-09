@@ -156,6 +156,35 @@ public class CommandUtils {
     }
 
     /**
+     * Append an optional LMK Identifier trailer for shared-port multi-LMK hosts.
+     * When {@code lmkId} is blank/null, returns {@code command} unchanged.
+     * When set (e.g. "00" or "01"), appends ASCII "%{lmkId}" to the end of the command.
+     *
+     * Used by commands that do not embed '%' inside a mid-command '#' section
+     * (e.g. EW). EI embeds "%{id}" before '#' itself and should not use this helper.
+     *
+     * Example (Key Block EW):
+     *   ... ; 99 FFFF [S-keyblock] %01
+     */
+    public static byte[] withLmkId(byte[] command, String lmkId) {
+        if (command == null) {
+            throw new IllegalArgumentException("command must not be null");
+        }
+        if (lmkId == null || lmkId.isBlank()) {
+            return command;
+        }
+        try {
+            ByteArrayOutputStream bos = new ByteArrayOutputStream(command.length + 1 + lmkId.length());
+            bos.write(command);
+            bos.write('%');
+            bos.write(lmkId.getBytes(StandardCharsets.US_ASCII));
+            return bos.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException("Error appending LMK id", e);
+        }
+    }
+
+    /**
      * Parse the header from a response (first N bytes as ASCII).
      */
     public static String extractHeader(byte[] response, int headerLength) {

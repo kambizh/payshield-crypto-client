@@ -31,6 +31,9 @@ import java.nio.charset.StandardCharsets;
  *   [State] ;
  *   [Country: 2A] ;
  *
+ * Shared-port multi-LMK: callers may append "%{lmkId}" via {@link CommandUtils#withLmkId}
+ * after building the body (end of subject fields), e.g. ...country;%01
+ *
  * Command format (Subject Data Type = '0', DER template):
  *   ... same up to Hash ID ...
  *   [Subject Data Type: 1N]       '0' = use template

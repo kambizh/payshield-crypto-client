@@ -73,6 +73,15 @@ public class PayShieldException extends RuntimeException {
             case "A1" -> "Incompatible LMK scheme of key in user storage";
             case "A2" -> "Incompatible key block LMK identifier";
             case "A3" -> "Incompatible key block export type";
+            case "A4" -> "Key block authentication failure";
+            case "A5" -> "Incompatible key length";
+            case "A6" -> "Invalid key usage";
+            case "A7" -> "Invalid algorithm";
+            case "A8" -> "Invalid mode of use";
+            case "A9" -> "Invalid key version number";
+            case "AA" -> "Invalid export field";
+            case "AB" -> "Invalid number of optional blocks";
+            case "AC" -> "Optional header block error";
             default -> "Unknown error code: " + errorCode;
         };
     }

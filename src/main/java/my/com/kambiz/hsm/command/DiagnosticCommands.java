@@ -15,6 +15,8 @@ import java.util.Map;
  * NC Command - Perform Diagnostics (response: ND)
  *   Tests processor, software, LMK. Returns LMK check value + firmware number.
  *   Command:  [Header] NC
+ *   Shared-port multi-LMK: callers may append "%{lmkId}" via {@link CommandUtils#withLmkId},
+ *   e.g. 0000NC%01
  *   Response: [Header] ND [ErrorCode:2A] [LMKCheck:16N] [FirmwareNumber:9A]
  *
  * NO Command - HSM Status (response: NP)

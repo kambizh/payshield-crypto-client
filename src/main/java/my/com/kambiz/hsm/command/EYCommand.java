@@ -25,6 +25,9 @@ import org.slf4j.LoggerFactory;
  * No separate MAC field. No separate DER. No auth data.
  * The MAC is embedded inside the key block.
  *
+ * Shared-port multi-LMK: callers may append "%{lmkId}" via {@link CommandUtils#withLmkId}
+ * after building the body, e.g. ...;S[pubkey-keyblock]%01
+ *
  * Response (EZ) format is identical for both modes.
  */
 public class EYCommand {

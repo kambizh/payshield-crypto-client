@@ -18,6 +18,10 @@ import org.slf4j.LoggerFactory;
  *             [KeyVersion:2N] [Exportability:1A] [NumOptBlocks:2N]
  *   Response: [Header] EP [Error:2A] ['S' + PublicKey key block]
  *
+ * Shared-port multi-LMK (Key Block): insert "%{lmkId}" after '~' and before '#',
+ * e.g. ...~%01#V00N00  (same placement idea as EI's % before #).
+ * Variant LMK: callers may append "%{lmkId}" at the end via {@link CommandUtils#withLmkId}.
+ *
  * In Key Block mode:
  *   - No separate MAC field; the MAC is embedded inside the key block
  *   - The response returns 'S' + key block data
@@ -43,29 +47,50 @@ public class EOCommand {
     }
 
     /**
-     * Build EO command for Key Block LMK.
-     * Requires '~' to terminate public key, then '#' + key block attributes.
-     *
-     * @param header        message header
-     * @param publicKeyDer  DER-encoded RSA public key
-     * @param modeOfUse     'V'=Verify (typical for EY usage), 'N'=No restriction
-     * @param keyVersion    "00"-"99"
-     * @param exportability 'N'=Non-exportable, 'S'=Exportable
+     * Build EO command for Key Block LMK (dual-port / no LMK Identifier).
      */
     public static byte[] buildKeyBlock(String header, byte[] publicKeyDer,
                                        String modeOfUse, String keyVersion, String exportability) {
-        log.debug("Building EO command for Key Block LMK: modeOfUse={}, version={}, export={}",
-                modeOfUse, keyVersion, exportability);
+        return buildKeyBlock(header, publicKeyDer, modeOfUse, keyVersion, exportability, null);
+    }
 
+    /**
+     * Build EO command for Key Block LMK, optionally with LMK Identifier for shared-port hosts.
+     *
+     * When {@code lmkId} is set (e.g. "01"):
+     *   EO 01 [pubkey] ~ %01 # V 00 N 00
+     * When blank/null (dual-port lab):
+     *   EO 01 [pubkey] ~ # V 00 N 00
+     */
+    public static byte[] buildKeyBlock(String header, byte[] publicKeyDer,
+                                       String modeOfUse, String keyVersion, String exportability,
+                                       String lmkId) {
+        log.debug("Building EO command for Key Block LMK: modeOfUse={}, version={}, export={}, lmkId={}",
+                modeOfUse, keyVersion, exportability,
+                lmkId == null || lmkId.isBlank() ? "(none)" : lmkId);
+
+        if (lmkId != null && !lmkId.isBlank()) {
+            return CommandUtils.buildCommand(header, "EO",
+                    "01",
+                    publicKeyDer,
+                    "~",
+                    "%", lmkId,
+                    "#",
+                    modeOfUse,
+                    keyVersion,
+                    exportability,
+                    "00"
+            );
+        }
         return CommandUtils.buildCommand(header, "EO",
-                "01",                   // Encoding rules: DER ASN.1
-                publicKeyDer,           // Public key in DER format
-                "~",                    // Delimiter: terminates public key + optional auth data
-                "#",                    // Key Block delimiter
-                modeOfUse,              // Mode of Use (1 char)
-                keyVersion,             // Key Version Number (2 chars)
-                exportability,          // Exportability (1 char)
-                "00"                    // Number of Optional Blocks (2 chars)
+                "01",
+                publicKeyDer,
+                "~",
+                "#",
+                modeOfUse,
+                keyVersion,
+                exportability,
+                "00"
         );
     }
 
@@ -74,10 +99,19 @@ public class EOCommand {
      */
     public static byte[] build(String header, byte[] publicKeyDer, byte[] authData,
                                LmkMode lmkMode, String modeOfUse, String keyVersion, String exportability) {
+        return build(header, publicKeyDer, authData, lmkMode, modeOfUse, keyVersion, exportability, null);
+    }
+
+    /**
+     * Convenience: mode-aware dispatch with optional LMK Identifier.
+     */
+    public static byte[] build(String header, byte[] publicKeyDer, byte[] authData,
+                               LmkMode lmkMode, String modeOfUse, String keyVersion, String exportability,
+                               String lmkId) {
         if (lmkMode == LmkMode.KEYBLOCK) {
-            return buildKeyBlock(header, publicKeyDer, modeOfUse, keyVersion, exportability);
+            return buildKeyBlock(header, publicKeyDer, modeOfUse, keyVersion, exportability, lmkId);
         } else {
-            return build(header, publicKeyDer, authData);
+            return CommandUtils.withLmkId(build(header, publicKeyDer, authData), lmkId);
         }
     }
 
